@@ -1,0 +1,181 @@
+// Dual-window rate limiter.
+//
+// Every check enforces two bands simultaneously:
+//   - rpm: a 60-second fixed window
+//   - daily: a calendar-UTC-day fixed window
+//
+// Either band tripping returns false. A limit of 0 on either axis means
+// that axis is unmetered (Embedder tier default). When both axes are 0
+// the limiter short-circuits to allow.
+//
+// The store is injectable so tests can run against an in-memory backend
+// without needing Upstash credentials. Production uses Upstash REST,
+// which is the right pairing for Cloud Run (no persistent connection,
+// no cold-start cost on the client side).
+
+import { Redis } from "@upstash/redis";
+
+import type { RateLimits } from "./tiers.js";
+
+export interface RateLimitDecision {
+  allowed: boolean;
+  // Which band tripped first. Useful for the 429 response body so
+  // clients can present a precise reason.
+  reason: "ok" | "rpm" | "daily";
+  // Remaining count in each band after the increment. -1 means unmetered
+  // on that axis.
+  remaining_rpm: number;
+  remaining_daily: number;
+}
+
+export interface RateLimitStore {
+  // Atomically increment the counter at `key` and return the new value.
+  // If the counter was just created, set its TTL to `ttlSeconds`.
+  incrWithTtl(key: string, ttlSeconds: number): Promise<number>;
+}
+
+// -----------------------------------------------------------------
+// Upstash-backed production store.
+// -----------------------------------------------------------------
+
+export class UpstashRateLimitStore implements RateLimitStore {
+  constructor(private readonly redis: Redis) {}
+
+  async incrWithTtl(key: string, ttlSeconds: number): Promise<number> {
+    const count = await this.redis.incr(key);
+    if (count === 1) {
+      // First write in this window. Set TTL so the key auto-expires.
+      // EXPIRE failure is non-fatal (worst case: the key persists for
+      // one extra window cycle, which Redis garbage-collects anyway).
+      await this.redis.expire(key, ttlSeconds);
+    }
+    return count;
+  }
+}
+
+export function buildUpstashStore(): UpstashRateLimitStore {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) {
+    throw new Error(
+      "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must both be set.",
+    );
+  }
+  return new UpstashRateLimitStore(new Redis({ url, token }));
+}
+
+// -----------------------------------------------------------------
+// In-memory store for tests and local dev.
+//
+// Not safe across multiple processes. Do not use behind a load balancer.
+// -----------------------------------------------------------------
+
+interface MemoryEntry {
+  count: number;
+  expiresAt: number;
+}
+
+export class MemoryRateLimitStore implements RateLimitStore {
+  private readonly buckets = new Map<string, MemoryEntry>();
+  private now: () => number = () => Date.now();
+
+  // Test seam: tests inject a fake clock to advance time without sleep.
+  setClock(now: () => number): void {
+    this.now = now;
+  }
+
+  async incrWithTtl(key: string, ttlSeconds: number): Promise<number> {
+    const t = this.now();
+    const existing = this.buckets.get(key);
+    if (!existing || existing.expiresAt <= t) {
+      this.buckets.set(key, { count: 1, expiresAt: t + ttlSeconds * 1000 });
+      return 1;
+    }
+    existing.count += 1;
+    return existing.count;
+  }
+
+  // Diagnostics for tests; not used by production code.
+  size(): number {
+    return this.buckets.size;
+  }
+}
+
+// -----------------------------------------------------------------
+// Public check function. Identifier should already be tier-tagged so
+// the same identity does not collide across paths. Examples:
+//   ip:203.0.113.7              free-tier unauthed traffic
+//   key:550e8400-e29b-41d4-...  any authed key, keyed by key_id
+// -----------------------------------------------------------------
+
+const DAY_SECONDS = 86_400;
+
+function utcDayBucket(now: number): string {
+  // YYYYMMDD in UTC. Stable across processes; rolls at 00:00 UTC.
+  const d = new Date(now);
+  const y = d.getUTCFullYear().toString().padStart(4, "0");
+  const m = (d.getUTCMonth() + 1).toString().padStart(2, "0");
+  const day = d.getUTCDate().toString().padStart(2, "0");
+  return `${y}${m}${day}`;
+}
+
+function minuteBucket(now: number): number {
+  return Math.floor(now / 60_000);
+}
+
+export async function checkRateLimit(
+  store: RateLimitStore,
+  identifier: string,
+  limits: RateLimits,
+  nowMs: number = Date.now(),
+): Promise<RateLimitDecision> {
+  const rpmUnmetered = limits.rpm === 0;
+  const dailyUnmetered = limits.daily === 0;
+
+  if (rpmUnmetered && dailyUnmetered) {
+    return {
+      allowed: true,
+      reason: "ok",
+      remaining_rpm: -1,
+      remaining_daily: -1,
+    };
+  }
+
+  // Daily check first; on a cold day-start the burst window is empty
+  // anyway, so the order has no functional difference, but if the daily
+  // cap trips we skip the RPM increment to save a Redis op.
+  let dailyCount = 0;
+  if (!dailyUnmetered) {
+    const dailyKey = `rl:daily:${identifier}:${utcDayBucket(nowMs)}`;
+    dailyCount = await store.incrWithTtl(dailyKey, DAY_SECONDS);
+    if (dailyCount > limits.daily) {
+      return {
+        allowed: false,
+        reason: "daily",
+        remaining_rpm: -1,
+        remaining_daily: 0,
+      };
+    }
+  }
+
+  let rpmCount = 0;
+  if (!rpmUnmetered) {
+    const rpmKey = `rl:rpm:${identifier}:${minuteBucket(nowMs)}`;
+    rpmCount = await store.incrWithTtl(rpmKey, 60);
+    if (rpmCount > limits.rpm) {
+      return {
+        allowed: false,
+        reason: "rpm",
+        remaining_rpm: 0,
+        remaining_daily: dailyUnmetered ? -1 : Math.max(0, limits.daily - dailyCount),
+      };
+    }
+  }
+
+  return {
+    allowed: true,
+    reason: "ok",
+    remaining_rpm: rpmUnmetered ? -1 : Math.max(0, limits.rpm - rpmCount),
+    remaining_daily: dailyUnmetered ? -1 : Math.max(0, limits.daily - dailyCount),
+  };
+}
