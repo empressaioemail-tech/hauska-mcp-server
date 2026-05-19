@@ -20,6 +20,21 @@ breaking changes are common until the 1.0.0 release.
   avoids transferring hidden jurisdictions over the wire.
 
 ### Added
+- **Group 3 L3 — deliverable-letter tools (`cortex_deliverable_letter_*`).**
+  Five MCP tools for the L3 deliverable-letter surface (the
+  comment-response letter as a classified atom):
+  - `cortex_deliverable_letter_create` → `POST /api/engagements/:id/deliverable-letters`
+  - `cortex_deliverable_letter_update_section` → `POST /api/deliverable-letters/:id/sections` (upsert by index)
+  - `cortex_deliverable_letter_attach_provenance` → `POST /api/deliverable-letters/:id/sections/:idx/provenance`
+  - `cortex_deliverable_letter_completeness_check` → `GET /api/deliverable-letters/:id/completeness`
+  - `cortex_deliverable_letter_send` → `POST /api/deliverable-letters/:id/send`
+
+  Same MCP-first contract as L1/L2: legacy endpoints built to match by
+  cc-agent-C in Lane C.4; mocked-fetch testable now, e2e blocked on
+  Lane C.4. `send` is gated server-side on completeness (cover + intro
+  + signature sections present) — the tool surfaces the 409 with the
+  named missing sections. Gate: `product='cortex'`. 12 new tests in
+  `tests/cortex-deliverable-letter.test.ts`.
 - **Group 3 L2 — sheet-content-extraction + attached-document tools.**
   Four MCP tools for the L2 surface (two coupled atoms, emitted
   together by the sheet-ingest pass):

@@ -187,6 +187,22 @@ lives in doc_repo `_research/2026-05-19_l_surface_endpoint_contracts_cc-agent-M.
 | `cortex_attached_document_list` | GET | `/api/engagements/:id/attached-documents` | bearer |
 | `cortex_attached_document_fetch` | GET | `/api/attached-documents/:id` | bearer |
 
+**L3 — deliverable-letter:**
+
+| Tool | Method | Legacy endpoint (MCP-first) | Auth |
+|---|---|---|---|
+| `cortex_deliverable_letter_create` | POST | `/api/engagements/:id/deliverable-letters` | bearer |
+| `cortex_deliverable_letter_update_section` | POST | `/api/deliverable-letters/:id/sections` | bearer |
+| `cortex_deliverable_letter_attach_provenance` | POST | `/api/deliverable-letters/:id/sections/:idx/provenance` | bearer |
+| `cortex_deliverable_letter_completeness_check` | GET | `/api/deliverable-letters/:id/completeness` | bearer |
+| `cortex_deliverable_letter_send` | POST | `/api/deliverable-letters/:id/send` | bearer |
+
+`cortex_deliverable_letter_send` is gated server-side on completeness
+(cover + intro + signature sections present). An incomplete letter
+returns a 409; the tool surfaces the named missing sections so the
+agent can add them via `cortex_deliverable_letter_update_section` and
+retry.
+
 L-surface atoms carry the full BaseAtomInstance contract, so their
 provenance uses real `did:hauska:<type>:<id>` DIDs via
 `lSurfaceProvenance` — unlike the Groups 1+2 tools, which wrap legacy
