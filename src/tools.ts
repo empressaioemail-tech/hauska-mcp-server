@@ -668,4 +668,320 @@ export function registerTools(server: McpServer) {
       }
     },
   );
+
+  // -----------------------------------------------------------------
+  // Cortex tool 1: cortex_snapshot_register
+  // Registers a Cortex (design accelerator) snapshot against an existing
+  // engagement (or creates a new engagement via projectName branch).
+  // Wraps POST /api/snapshots, which uses the x-snapshot-secret service
+  // auth path. Gate: product='cortex' required.
+  // -----------------------------------------------------------------
+  server.tool(
+    "cortex_snapshot_register",
+    "Cortex (design accelerator): register a versioned design snapshot. Provide engagement_id " +
+      "to attach to an existing engagement, OR project_name (plus optional revit_central_guid / " +
+      "revit_document_path) to create a new engagement at the same time. The payload object " +
+      "carries the Revit add-in's snapshot fields (project metadata, sheet refs, address, etc.). " +
+      "Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe(
+          "UUID of an existing engagement to attach the snapshot to. " +
+            "Mutually exclusive with project_name.",
+        ),
+      project_name: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "Name for a new engagement when no engagement_id is supplied. " +
+            "Mutually exclusive with engagement_id.",
+        ),
+      revit_central_guid: z
+        .string()
+        .optional()
+        .describe(
+          "Revit central document GUID. Only meaningful when project_name is supplied.",
+        ),
+      revit_document_path: z
+        .string()
+        .optional()
+        .describe(
+          "Revit document path. Only meaningful when project_name is supplied.",
+        ),
+      payload: z
+        .record(z.unknown())
+        .describe(
+          "Snapshot payload object (project metadata, sheets, address, etc.). " +
+            "Passed through to the legacy backend after engagement-id / project-name routing.",
+        ),
+    },
+    async ({
+      engagement_id,
+      project_name,
+      revit_central_guid,
+      revit_document_path,
+      payload,
+    }) => {
+      const gate = requireProduct("cortex_snapshot_register", "cortex");
+      if (!gate.ok) return gate.content;
+      if (!engagement_id && !project_name) {
+        return errorContent(
+          "cortex_snapshot_register requires either engagement_id (attach to existing engagement) or project_name (create new engagement).",
+        );
+      }
+      if (engagement_id && project_name) {
+        return errorContent(
+          "cortex_snapshot_register: engagement_id and project_name are mutually exclusive.",
+        );
+      }
+      const tier = getCurrentTier();
+      try {
+        const response = engagement_id
+          ? await legacyClient.registerSnapshot({ engagementId: engagement_id, payload })
+          : await legacyClient.registerSnapshot({
+              projectName: project_name as string,
+              revitCentralGuid: revit_central_guid,
+              revitDocumentPath: revit_document_path,
+              payload,
+            });
+        const rowId =
+          (typeof response["snapshotId"] === "string" && response["snapshotId"]) ||
+          (typeof response["id"] === "string" && response["id"]) ||
+          (engagement_id ?? "unknown");
+        logger.info("tool_call", {
+          tool: "cortex_snapshot_register",
+          engagement_id,
+          project_name,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            codexProvenance({
+              atomKind: "submission",
+              rowId,
+              jurisdictionTenant: "legacy",
+              sourcePath: "/api/snapshots",
+            }),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_snapshot_register", err),
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Cortex tool 2: cortex_ifc_ingest
+  // Uploads an IFC file against a registered snapshot. Accepts the IFC
+  // bytes as base64; decodes to a buffer and POSTs as multipart/form-data
+  // to /api/snapshots/:id/ifc. Triggers lib/ifcIngest.ts on the legacy
+  // side. Known carry-over: IFC import has unresolved failure modes per
+  // the sprint decision record; this tool surfaces raw legacy responses
+  // so callers see whatever the backend returns. Gate: product='cortex'.
+  // -----------------------------------------------------------------
+  server.tool(
+    "cortex_ifc_ingest",
+    "Cortex (design accelerator): ingest an IFC file against an existing snapshot. " +
+      "Pass the IFC bytes as base64 plus a filename. The legacy backend parses the IFC and " +
+      "emits a bim-model atom symmetric with Push-to-Revit. Practical size limit applies " +
+      "(MCP JSON-RPC message envelopes are bounded by client implementations; typical IFC " +
+      "files of a few MB are fine, very large models may need a different ingest path). " +
+      "Known issue: IFC import has unresolved failure modes carried over from the prior " +
+      "sprint; this tool surfaces raw legacy responses so callers see backend errors directly. " +
+      "Requires a Cortex-product API key.",
+    {
+      snapshot_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the snapshot to attach the IFC to. Required."),
+      filename: z
+        .string()
+        .min(1)
+        .describe(
+          'IFC filename (e.g. "Project.ifc"). Required; used for multipart field metadata.',
+        ),
+      ifc_base64: z
+        .string()
+        .min(1)
+        .describe(
+          "Base64-encoded IFC file bytes. Required. " +
+            "The MCP server decodes to a Buffer before POSTing to the legacy backend.",
+        ),
+    },
+    async ({ snapshot_id, filename, ifc_base64 }) => {
+      const gate = requireProduct("cortex_ifc_ingest", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      let bytes: Buffer;
+      try {
+        bytes = Buffer.from(ifc_base64, "base64");
+      } catch (err) {
+        return errorContent(
+          `cortex_ifc_ingest: ifc_base64 is not valid base64 (${String(err).slice(0, 100)}).`,
+        );
+      }
+      if (bytes.length === 0) {
+        return errorContent(
+          "cortex_ifc_ingest: decoded IFC payload is empty. Check the base64 encoding.",
+        );
+      }
+      try {
+        const response = await legacyClient.ingestIfc({
+          snapshotId: snapshot_id,
+          filename,
+          bytes,
+          contentType: "application/octet-stream",
+        });
+        logger.info("tool_call", {
+          tool: "cortex_ifc_ingest",
+          snapshot_id,
+          filename,
+          bytes: bytes.length,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            codexProvenance({
+              atomKind: "submission",
+              rowId: snapshot_id,
+              jurisdictionTenant: "legacy",
+              sourcePath: `/api/snapshots/${snapshot_id}/ifc`,
+            }),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(describeLegacyFailure("cortex_ifc_ingest", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Cortex tool 3: cortex_bim_model_query
+  // Returns the bim-model atom for an engagement, or { bimModel: null }
+  // when no model has been pushed. The legacy backend may synthesize a
+  // wire shape from a parsed IFC ingest when the bim_models row is
+  // absent. Wraps GET /api/engagements/:id/bim-model. Gate: cortex.
+  // Note: requires Lane C bearer-token middleware on the legacy side.
+  // -----------------------------------------------------------------
+  server.tool(
+    "cortex_bim_model_query",
+    "Cortex (design accelerator): fetch the bim-model atom for an engagement. Returns the " +
+      "model wire shape (materializable elements, glTF refs, ingest metadata) or " +
+      "{ bimModel: null } when no model has been pushed yet. The legacy backend may " +
+      "synthesize a wire shape from a parsed IFC ingest when the bim_models row is absent. " +
+      "Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement. Required."),
+    },
+    async ({ engagement_id }) => {
+      const gate = requireProduct("cortex_bim_model_query", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.queryBimModel({
+          engagementId: engagement_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_bim_model_query",
+          engagement_id,
+          tier,
+          has_model: response.bimModel !== null,
+        });
+        const provenance = response.bimModel
+          ? codexProvenance({
+              atomKind: "submission",
+              rowId: engagement_id,
+              jurisdictionTenant: "legacy",
+              sourcePath: `/api/engagements/${engagement_id}/bim-model`,
+            })
+          : null;
+        return envelopeContent(codexEnvelope(response, provenance, { tier }));
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_bim_model_query", err),
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Cortex tool 4: cortex_briefing_emit
+  // Kicks off parcel-briefing generation for an engagement. Same 202 /
+  // 409-already-in-flight pattern as finding generation; legacy-client
+  // normalizes 409 into alreadyInFlight=true.
+  // Wraps POST /api/engagements/:id/briefing/generate. Gate: cortex.
+  // Note: requires Lane C bearer-token middleware on the legacy side.
+  // -----------------------------------------------------------------
+  server.tool(
+    "cortex_briefing_emit",
+    "Cortex (design accelerator): kick off parcel-briefing generation for an engagement. " +
+      "Returns generationId for status polling. If a briefing-generation job is already in " +
+      "flight, returns that job's generationId with alreadyInFlight=true rather than starting " +
+      "a new one. The engagement must already have briefing sources uploaded (use the legacy " +
+      "UI's source-upload flow); a 400 surfaces when no sources are attached. " +
+      "Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe(
+          "UUID of the engagement to generate the briefing for. Required.",
+        ),
+      regenerate: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          "Informational hint when re-running generation after a prior pass. Currently the " +
+            "legacy backend auto-detects prior narratives; this field exists for forward compat.",
+        ),
+    },
+    async ({ engagement_id, regenerate }) => {
+      const gate = requireProduct("cortex_briefing_emit", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.emitBriefing({
+          engagementId: engagement_id,
+          regenerate,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_briefing_emit",
+          engagement_id,
+          generation_id: response.generationId,
+          already_in_flight: response.alreadyInFlight ?? false,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            codexProvenance({
+              atomKind: "finding-generation-run",
+              rowId: response.generationId,
+              jurisdictionTenant: "legacy",
+              sourcePath: `/api/engagements/${engagement_id}/briefing/generate`,
+            }),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_briefing_emit", err),
+        );
+      }
+    },
+  );
 }
