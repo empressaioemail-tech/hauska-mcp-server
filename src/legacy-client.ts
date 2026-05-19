@@ -486,6 +486,54 @@ export interface ListProductSpecReferencesResponse {
 }
 
 // -----------------------------------------------------------------
+// L6 deliverable-letter-render wire types (Lane B Group 3).
+//
+// Hand-mirrored from `hauska-engine/packages/atoms` (Sync B(L6), engine
+// atoms package 0.6.0). The rendered DOCX/PDF artifact of an L3
+// deliverable-letter, as a first-class atom. MCP-first contract: the
+// L6 endpoints do not exist in legacy-design-tools yet; this client
+// defines them and cc-agent-C builds the matching routes in Lane C.4.
+// -----------------------------------------------------------------
+
+/** Render output format. Lowercase, matching the engine atom enum. */
+export type RenderFormat = "docx" | "pdf";
+
+/** Full `deliverable-letter-render` atom instance returned by the L6 endpoints. */
+export interface DeliverableLetterRenderAtom {
+  entityType: "deliverable-letter-render";
+  entityId: string;
+  jurisdictionTenant: string;
+  fetchedAt: string;
+  sourceAdapter: string;
+  sourceUrl: string;
+  contentHash: string;
+  /** did:hauska:deliverable-letter:<localId> ref to the L3 source letter. */
+  sourceLetterRef: string;
+  /** Source letter's contentHash at render time — pins the rendered version. */
+  sourceLetterVersion: string;
+  format: RenderFormat;
+  /** Opaque pointer to the stored render bytes. */
+  blobRef: string;
+  renderedAt: string;
+  renderedByActorId: string | null;
+  accessPolicy?: string;
+}
+
+export interface DeliverableLetterRenderResponse {
+  render: DeliverableLetterRenderAtom;
+  /**
+   * Optional directly-usable download URL (e.g. a signed URL) the
+   * backend may resolve from `render.blobRef`. The atom carries the
+   * opaque `blobRef`; this is a convenience the backend can include.
+   */
+  downloadUrl?: string;
+}
+
+export interface ListDeliverableLetterRendersResponse {
+  renders: DeliverableLetterRenderAtom[];
+}
+
+// -----------------------------------------------------------------
 // Error types — matched to hauska-client.ts conventions so tool
 // handlers can use a uniform error shape across both backends.
 // -----------------------------------------------------------------
@@ -1453,6 +1501,57 @@ export const legacyClient = {
   }): Promise<ProductSpecReferenceResponse> {
     const { body } = await legacyFetch<ProductSpecReferenceResponse>(
       `/api/product-spec-references/${encodeURIComponent(params.referenceId)}`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  // -----------------------------------------------------------------
+  // L6 deliverable-letter-render methods (Group 3). MCP-first contract
+  // — built to match by cc-agent-C in Lane C.4. All bearer-auth.
+  // -----------------------------------------------------------------
+
+  /**
+   * POST /api/deliverable-letters/:letterId/renders
+   *
+   * Renders an L3 deliverable letter to DOCX or PDF, producing a
+   * first-class `deliverable-letter-render` atom. The render is
+   * synchronous — the call blocks until generation completes. The
+   * backend gates on completeness first (via the engine
+   * `deliverableLetterCompleteness` helper): an incomplete letter is
+   * rejected with a 409 `{ error: "deliverable_letter_incomplete",
+   * missing: [...] }` rather than producing a confusing partial
+   * document. On success the render atom pins `sourceLetterVersion` to
+   * the source letter's contentHash at render time.
+   */
+  async renderDeliverableLetter(params: {
+    letterId: string;
+    format: RenderFormat;
+    renderedByActorId?: string;
+  }): Promise<DeliverableLetterRenderResponse> {
+    const jsonBody: Record<string, unknown> = { format: params.format };
+    if (params.renderedByActorId !== undefined) {
+      jsonBody.renderedByActorId = params.renderedByActorId;
+    }
+    const { body } = await legacyFetch<DeliverableLetterRenderResponse>(
+      `/api/deliverable-letters/${encodeURIComponent(params.letterId)}/renders`,
+      { method: "POST", jsonBody },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/deliverable-letters/:letterId/renders
+   *
+   * Lists every render of a deliverable letter, newest-first. A letter
+   * is 1-to-many with its renders (format changes, re-renders against
+   * an updated source letter).
+   */
+  async listDeliverableLetterRenders(params: {
+    letterId: string;
+  }): Promise<ListDeliverableLetterRendersResponse> {
+    const { body } = await legacyFetch<ListDeliverableLetterRendersResponse>(
+      `/api/deliverable-letters/${encodeURIComponent(params.letterId)}/renders`,
       { method: "GET" },
     );
     return body;

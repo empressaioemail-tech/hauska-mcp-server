@@ -20,6 +20,20 @@ breaking changes are common until the 1.0.0 release.
   avoids transferring hidden jurisdictions over the wire.
 
 ### Added
+- **Group 3 L6 — deliverable-letter render tools.** Two MCP tools for
+  the L6 surface — the last L-surface phase; **Group 3 is complete**
+  (all six L-surface tool sets live):
+  - `cortex_deliverable_letter_render` → `POST /api/deliverable-letters/:id/renders`
+  - `cortex_deliverable_letter_renders_list` → `GET /api/deliverable-letters/:id/renders`
+
+  `render` produces a first-class `deliverable-letter-render` atom
+  (DOCX / PDF) plus a download URL. The render is synchronous and gated
+  server-side on completeness — an incomplete letter is rejected with a
+  409 and the tool surfaces the missing sections (same shape as
+  `cortex_deliverable_letter_send`). A letter is one-to-many with its
+  renders; `renders_list` returns them newest-first. Same MCP-first
+  contract as L1-L5. Gate: `product='cortex'`. 9 new tests in
+  `tests/cortex-deliverable-letter-render.test.ts`.
 - **Group 3 L5 — product-spec-reference tools (`cortex_product_spec_reference_*`).**
   Four MCP tools for the L5 product-spec-reference surface (ICC-ES-
   evaluated products with live evaluation status):
