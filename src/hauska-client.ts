@@ -1,185 +1,285 @@
 // Hauska Client.
 //
-// This file defines the interface between the MCP server and the Hauska
-// atom query backend. It is currently a mocked stub that returns example
-// data. Nick replaces these implementations with real calls to the
-// existing query layer that Cortex and Codex already use.
+// HTTP client against the `hauska-engine` retrieval API (Sync 3 contract).
+// Wraps five locked endpoints exposed by `services/retrieval-api/src/server.ts`
+// in the engine repo:
 //
-// DO NOT duplicate query logic in the MCP server. The MCP server is a thin
-// agent-facing interface. All retrieval and reasoning lives in the backend.
+//   GET /search
+//   GET /atoms/:did
+//   GET /jurisdictions
+//   GET /jurisdictions/:id
+//   GET /jurisdictions/:id/permits
+//
+// Bearer-token auth via `HAUSKA_ENGINE_API_KEY`. Base URL via
+// `HAUSKA_BACKEND_URL`. Both default to localhost values for dev so the
+// scaffold runs without environment plumbing.
+//
+// The wire-shape types below mirror the engine's storage port (AtomSearchResult,
+// JurisdictionStatusSnapshot) and BaseAtomInstance shape exactly. They are
+// duplicated here intentionally; we do not pull `@hauska-engine/*` workspace
+// packages into the mcp-server build graph. If the engine contract ever
+// drifts, the mismatch surfaces in `tools.ts` consumers as a type error.
 
-const BACKEND_URL = process.env.HAUSKA_BACKEND_URL ?? "http://localhost:4000";
-const BACKEND_KEY = process.env.HAUSKA_BACKEND_API_KEY ?? "";
+import { logger } from "./logger.js";
 
-// ---------------------------------------------------------------
-// Types. Match the atom model from the architecture documents.
-// ---------------------------------------------------------------
+const DEFAULT_BACKEND_URL = "http://localhost:8080";
+const DEFAULT_TIMEOUT_MS = 10_000;
 
-export interface Atom {
-  id: string;
-  jurisdiction: string;
-  type: string;
-  title: string;
-  content: string;
-  source: {
-    document: string;
-    section: string;
-    page?: number;
-  };
-  provenance: {
-    hash: string;
-    ingested_at: string;
-    version: string;
-  };
+function backendUrl(): string {
+  return process.env.HAUSKA_BACKEND_URL ?? DEFAULT_BACKEND_URL;
 }
 
-export interface AtomReference {
-  id: string;
-  title: string;
-  jurisdiction: string;
-  relevance_score: number;
+function engineApiKey(): string {
+  return process.env.HAUSKA_ENGINE_API_KEY ?? "";
+}
+
+// -----------------------------------------------------------------
+// Wire types — mirrored from `hauska-engine` storage and atom packages.
+// -----------------------------------------------------------------
+
+export type CodeAtomEntityType =
+  | "code-section"
+  | "code-definition"
+  | "code-amendment"
+  | "code-cross-reference"
+  | "code-edition"
+  | "jurisdiction-corpus";
+
+/** Result row from `GET /search` and `GET /jurisdictions/:id/permits`. */
+export interface AtomSearchResult {
+  atomDid: string;
+  entityType: CodeAtomEntityType;
+  entityId: string;
+  jurisdictionTenant: string;
+  sectionNumber: string | null;
   snippet: string;
+  score: number;
 }
 
-export interface JurisdictionSummary {
-  id: string;
-  name: string;
-  state: string;
-  ingested_at: string;
-  atom_count: number;
-  version: string;
+export interface SearchResponse {
+  results: AtomSearchResult[];
+  totalCandidates: number;
 }
 
-// ---------------------------------------------------------------
-// Client interface. Replace each method body with real backend calls.
-// ---------------------------------------------------------------
+/**
+ * Fields common to every atom instance per the engine's `BaseAtomInstance`.
+ * Each entityType extends this with its own payload; we keep the response
+ * loosely typed and let the tool layer pass through unknown fields.
+ */
+export interface AtomInstanceBase {
+  entityType: CodeAtomEntityType;
+  entityId: string;
+  jurisdictionTenant: string;
+  fetchedAt: string;
+  sourceAdapter: string;
+  sourceUrl: string;
+  contentHash: string;
+  [key: string]: unknown;
+}
+
+export interface AtomLink {
+  fromEntityType: string;
+  fromEntityId: string;
+  toEntityType: string;
+  toEntityId: string;
+  linkType: string;
+  context?: string;
+}
+
+export interface GetAtomResponse {
+  atom: AtomInstanceBase | null;
+  composition?: Array<{
+    link: AtomLink;
+    atom: AtomInstanceBase | null;
+  }>;
+}
+
+/** Per-jurisdiction snapshot from `GET /jurisdictions` and `:id`. */
+export interface JurisdictionStatusSnapshot {
+  jurisdictionTenant: string;
+  jurisdictionName: string;
+  currentEditionDid: string | null;
+  qualityBar:
+    | "not-evaluated"
+    | "failing"
+    | "passing"
+    | "passing-recalibrated";
+  top3Score: number | null;
+  sectionNumScore: number | null;
+  crossRefScore: number | null;
+  atomCount: number;
+  lastRefreshedAt: string | null;
+  driftStatus: "clean" | "amendments-pending" | "stale";
+}
+
+export interface ListJurisdictionsResponse {
+  jurisdictions: JurisdictionStatusSnapshot[];
+}
+
+export interface QueryJurisdictionResponse {
+  status: JurisdictionStatusSnapshot | null;
+  permitAtoms?: AtomSearchResult[];
+}
+
+// -----------------------------------------------------------------
+// Error type — surfaced to tool handlers so they can choose between
+// "engine reachable, atom missing" (404) and "engine unreachable / 5xx"
+// (operator-actionable).
+// -----------------------------------------------------------------
+
+export class EngineHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly url: string,
+    public readonly body: string,
+  ) {
+    super(
+      `Engine request failed (${status}) for ${url}: ${body.slice(0, 200)}`,
+    );
+    this.name = "EngineHttpError";
+  }
+}
+
+export class EngineUnreachableError extends Error {
+  constructor(public readonly url: string, cause: unknown) {
+    super(`Engine unreachable at ${url}: ${String(cause)}`);
+    this.name = "EngineUnreachableError";
+    this.cause = cause;
+  }
+}
+
+// -----------------------------------------------------------------
+// Core fetch wrapper.
+// -----------------------------------------------------------------
+
+async function engineFetch<T>(
+  pathWithQuery: string,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<T> {
+  const url = `${backendUrl()}${pathWithQuery}`;
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    "user-agent": "hauska-mcp-server/0.1",
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  const apiKey = engineApiKey();
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    init?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  );
+
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, headers, signal: controller.signal });
+  } catch (err) {
+    throw new EngineUnreachableError(url, err);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "<no-body>");
+    logger.warn("engine_http_error", {
+      url,
+      status: res.status,
+      body: body.slice(0, 500),
+    });
+    throw new EngineHttpError(res.status, url, body);
+  }
+
+  return (await res.json()) as T;
+}
+
+function appendIfDefined(
+  params: URLSearchParams,
+  key: string,
+  value: string | number | undefined,
+): void {
+  if (value === undefined) return;
+  params.set(key, String(value));
+}
+
+// -----------------------------------------------------------------
+// Client.
+// -----------------------------------------------------------------
 
 export const hauskaClient = {
   async searchAtoms(params: {
     query: string;
     jurisdiction?: string;
+    entityType?: CodeAtomEntityType;
     limit?: number;
-  }): Promise<{ atoms: AtomReference[]; query: string; total: number }> {
-    // TODO: Nick. Replace with real call to the backend search endpoint.
-    // const response = await fetch(`${BACKEND_URL}/search`, { ... });
-    // return await response.json();
-
-    return {
-      query: params.query,
-      total: 0,
-      atoms: [
-        {
-          id: "atom_bastrop_001",
-          title: "Example atom (mocked response).",
-          jurisdiction: params.jurisdiction ?? "bastrop-tx",
-          relevance_score: 0.92,
-          snippet:
-            "This is a mocked atom reference. Replace hauskaClient.searchAtoms with a real backend call.",
-        },
-      ],
-    };
+  }): Promise<SearchResponse> {
+    const qs = new URLSearchParams();
+    qs.set("q", params.query);
+    appendIfDefined(qs, "jurisdiction", params.jurisdiction);
+    appendIfDefined(qs, "entityType", params.entityType);
+    appendIfDefined(qs, "limit", params.limit);
+    return engineFetch<SearchResponse>(`/search?${qs.toString()}`);
   },
 
   async getAtom(params: {
-    atom_id: string;
-    include_composition?: boolean;
-  }): Promise<{ atom: Atom; composed_of?: AtomReference[]; composes?: AtomReference[] }> {
-    // TODO: Nick. Replace with real call.
-    return {
-      atom: {
-        id: params.atom_id,
-        jurisdiction: "bastrop-tx",
-        type: "code_section",
-        title: "Mocked atom.",
-        content: "This is mocked content. Wire this to the real backend.",
-        source: {
-          document: "Bastrop Municipal Code",
-          section: "§ 0.0.0",
-        },
-        provenance: {
-          hash: "sha256:mocked",
-          ingested_at: new Date().toISOString(),
-          version: "v0",
-        },
-      },
-    };
+    atomDid: string;
+    includeComposition?: boolean;
+  }): Promise<GetAtomResponse> {
+    const qs = new URLSearchParams();
+    if (params.includeComposition) qs.set("includeComposition", "true");
+    const query = qs.toString();
+    const path = `/atoms/${encodeURIComponent(params.atomDid)}${
+      query ? `?${query}` : ""
+    }`;
+    try {
+      return await engineFetch<GetAtomResponse>(path);
+    } catch (err) {
+      if (err instanceof EngineHttpError && err.status === 404) {
+        return { atom: null };
+      }
+      throw err;
+    }
+  },
+
+  async listJurisdictions(params?: {
+    qualityBarOnly?: boolean;
+  }): Promise<ListJurisdictionsResponse> {
+    const qs = new URLSearchParams();
+    if (params?.qualityBarOnly) qs.set("qualityBarOnly", "true");
+    const query = qs.toString();
+    const path = `/jurisdictions${query ? `?${query}` : ""}`;
+    return engineFetch<ListJurisdictionsResponse>(path);
   },
 
   async queryJurisdiction(params: {
     jurisdiction: string;
-    parcel_id?: string;
-    address?: string;
-    query_type?: string;
-  }): Promise<{
-    jurisdiction: string;
-    parcel?: { id: string; address: string };
-    results: Record<string, unknown>;
-    citations: AtomReference[];
-  }> {
-    // TODO: Nick. Replace with real call.
-    return {
-      jurisdiction: params.jurisdiction,
-      parcel: params.parcel_id
-        ? { id: params.parcel_id, address: params.address ?? "unknown" }
-        : undefined,
-      results: {
-        note: "Mocked response. Wire this to the real backend.",
-        query_type: params.query_type ?? "all",
-      },
-      citations: [],
-    };
+    queryType?: "summary" | "permits";
+  }): Promise<QueryJurisdictionResponse> {
+    const qs = new URLSearchParams();
+    if (params.queryType) qs.set("queryType", params.queryType);
+    const query = qs.toString();
+    const path = `/jurisdictions/${encodeURIComponent(params.jurisdiction)}${
+      query ? `?${query}` : ""
+    }`;
+    try {
+      return await engineFetch<QueryJurisdictionResponse>(path);
+    } catch (err) {
+      if (err instanceof EngineHttpError && err.status === 404) {
+        return { status: null };
+      }
+      throw err;
+    }
   },
 
-  async getPermitRequirements(params: {
+  async searchPermitAtoms(params: {
     jurisdiction: string;
-    project_type: string;
-    parcel_id?: string;
-  }): Promise<{
-    jurisdiction: string;
-    project_type: string;
-    requirements: Array<{
-      name: string;
-      description: string;
-      department: string;
-      sequence_order: number;
-      citation: AtomReference;
-    }>;
-  }> {
-    // TODO: Nick. Replace with real call.
-    return {
-      jurisdiction: params.jurisdiction,
-      project_type: params.project_type,
-      requirements: [
-        {
-          name: "Mocked permit requirement",
-          description: "Wire this to the real backend.",
-          department: "Planning",
-          sequence_order: 1,
-          citation: {
-            id: "atom_mocked",
-            title: "Mocked citation",
-            jurisdiction: params.jurisdiction,
-            relevance_score: 1.0,
-            snippet: "Mocked.",
-          },
-        },
-      ],
-    };
-  },
-
-  async listJurisdictions(): Promise<{ jurisdictions: JurisdictionSummary[] }> {
-    // TODO: Nick. Replace with real call.
-    return {
-      jurisdictions: [
-        {
-          id: "bastrop-tx",
-          name: "Bastrop, TX",
-          state: "TX",
-          ingested_at: "2026-01-15T00:00:00Z",
-          atom_count: 0,
-          version: "v1",
-        },
-      ],
-    };
+    projectType: string;
+  }): Promise<QueryJurisdictionResponse> {
+    const qs = new URLSearchParams();
+    qs.set("projectType", params.projectType);
+    const path = `/jurisdictions/${encodeURIComponent(
+      params.jurisdiction,
+    )}/permits?${qs.toString()}`;
+    return engineFetch<QueryJurisdictionResponse>(path);
   },
 };
