@@ -15,6 +15,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import {
+  codexEnvelope,
+  codexProvenance,
   getAtomEnvelope,
   listJurisdictionsEnvelope,
   queryJurisdictionEnvelope,
@@ -27,8 +29,14 @@ import {
   EngineUnreachableError,
   hauskaClient,
 } from "./hauska-client.js";
+import {
+  LegacyHttpError,
+  LegacyUnreachableError,
+  legacyClient,
+} from "./legacy-client.js";
 import { logger } from "./logger.js";
-import { getCurrentTier } from "./request-context.js";
+import type { Product } from "./products.js";
+import { getCurrentProduct, getCurrentTier } from "./request-context.js";
 
 const ATOM_DID_REGEX = /^did:hauska:[a-z-]+:[^\s]+$/;
 
@@ -77,6 +85,53 @@ function describeEngineFailure(tool: string, err: unknown): string {
   }
   logger.error("tool_unknown_error", { tool, error: String(err) });
   return `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`;
+}
+
+function describeLegacyFailure(tool: string, err: unknown): string {
+  if (err instanceof LegacyUnreachableError) {
+    logger.error("tool_legacy_unreachable", { tool, url: err.url });
+    return `Codex backend is unreachable. ${err.url} did not respond. Try again or contact support@hauska.dev if the outage persists.`;
+  }
+  if (err instanceof LegacyHttpError) {
+    logger.warn("tool_legacy_http_error", {
+      tool,
+      status: err.status,
+      url: err.url,
+    });
+    if (err.status >= 500) {
+      return "Codex backend returned a server error. Engineering has been notified.";
+    }
+    if (err.status === 404) {
+      return `Codex backend returned 404: ${err.body.slice(0, 200)}`;
+    }
+    if (err.status === 409) {
+      return `Codex backend returned a conflict (409): ${err.body.slice(0, 200)}`;
+    }
+    return `Codex backend rejected the request (${err.status}): ${err.body.slice(0, 200)}`;
+  }
+  logger.error("tool_unknown_error", { tool, error: String(err) });
+  return `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`;
+}
+
+// Product gate. Returns a 4xx-shaped error envelope when the caller's
+// product does not include this tool's product. Mirrors the
+// errorContent() helper so callers see a consistent isError envelope.
+//
+// Exported for direct testing of the gate semantics under various
+// AsyncLocalStorage bindings without spinning up a full McpServer.
+export function requireProduct(
+  tool: string,
+  expected: Product,
+): { ok: true } | { ok: false; content: ReturnType<typeof errorContent> } {
+  const actual = getCurrentProduct();
+  if (actual === expected) return { ok: true };
+  logger.warn("tool_product_denied", { tool, expected, actual });
+  return {
+    ok: false,
+    content: errorContent(
+      `Tool "${tool}" requires a "${expected}"-product API key. The caller is on product "${actual}". Contact support@hauska.dev to request access.`,
+    ),
+  };
 }
 
 export function registerTools(server: McpServer) {
@@ -332,6 +387,284 @@ export function registerTools(server: McpServer) {
         return envelopeContent(listJurisdictionsEnvelope(response, { tier }));
       } catch (err) {
         return errorContent(describeEngineFailure("list_jurisdictions", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Codex tool 1: codex_finding_generation
+  // Kicks off engine full-pass mode against a submission. Returns the
+  // generationId so the agent can poll status, OR the in-flight job's
+  // generationId if a single-flight race lost.
+  // Wraps POST /api/submissions/:submissionId/findings/generate.
+  // Gate: product='codex' required.
+  // -----------------------------------------------------------------
+  server.tool(
+    "codex_finding_generation",
+    "Codex (plan review): kick off engine finding generation against an existing submission. " +
+      "Returns the generationId for status polling. If a finding-generation job is already in " +
+      "flight for the submission, returns that job's generationId with alreadyInFlight=true " +
+      "rather than starting a new one. Requires a Codex-product API key.",
+    {
+      submission_id: z
+        .string()
+        .uuid()
+        .describe(
+          "UUID of the submission to generate findings against. Required.",
+        ),
+    },
+    async ({ submission_id }) => {
+      const gate = requireProduct("codex_finding_generation", "codex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.generateFindings({
+          submissionId: submission_id,
+        });
+        logger.info("tool_call", {
+          tool: "codex_finding_generation",
+          submission_id,
+          tier,
+          generation_id: response.generationId,
+          already_in_flight: response.alreadyInFlight ?? false,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            codexProvenance({
+              atomKind: "finding-generation-run",
+              rowId: response.generationId,
+              jurisdictionTenant: "legacy",
+              sourcePath: `/api/submissions/${submission_id}/findings/generate`,
+            }),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("codex_finding_generation", err),
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Codex tool 2: codex_override_write
+  // Writes a reviewer-authored revision finding against an existing
+  // finding atom. Wraps POST /api/findings/:findingId/override.
+  // Note: known carry-over from PR #20 close-out: the 409
+  // finding_already_overridden envelope does not carry resolvedBy /
+  // resolvedAt fields, so cross-tab race attribution is partial. Tool
+  // callers should not rely on those fields when handling 409.
+  // -----------------------------------------------------------------
+  server.tool(
+    "codex_override_write",
+    "Codex (plan review): write a reviewer-authored override revision against an existing " +
+      "finding. Pass the finding atom id plus the new text, severity (blocker / concern / advisory), " +
+      "category (setback / height / coverage / egress / use / overlay-conflict / divergence-related / " +
+      "other), and an optional reviewer comment. A finding can be overridden ONCE; a second override " +
+      "returns a 409 conflict. Requires a Codex-product API key.",
+    {
+      finding_id: z
+        .string()
+        .min(1)
+        .describe("Finding atom id to override. Required."),
+      text: z
+        .string()
+        .min(1)
+        .describe("Reviewer-authored finding body. Required."),
+      severity: z
+        .enum(["blocker", "concern", "advisory"])
+        .describe(
+          "Finding severity: blocker (code violation requiring resolution), " +
+            "concern (ambiguity or risk), advisory (preference / coordination note). Required.",
+        ),
+      category: z
+        .enum([
+          "setback",
+          "height",
+          "coverage",
+          "egress",
+          "use",
+          "overlay-conflict",
+          "divergence-related",
+          "other",
+        ])
+        .describe("Finding category. Required."),
+      reviewer_comment: z
+        .string()
+        .optional()
+        .describe(
+          "Optional reviewer comment captured alongside the override. Surfaces in the audit chain.",
+        ),
+    },
+    async ({ finding_id, text, severity, category, reviewer_comment }) => {
+      const gate = requireProduct("codex_override_write", "codex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.overrideFinding({
+          findingId: finding_id,
+          text,
+          severity,
+          category,
+          reviewerComment: reviewer_comment,
+        });
+        logger.info("tool_call", {
+          tool: "codex_override_write",
+          finding_id,
+          severity,
+          category,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            codexProvenance({
+              atomKind: "finding-override",
+              rowId: finding_id,
+              jurisdictionTenant: "legacy",
+              sourcePath: `/api/findings/${finding_id}/override`,
+            }),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("codex_override_write", err),
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Codex tool 3: codex_briefing_fetch
+  // Returns the engagement's parcel briefing as a wire object, or null
+  // when no briefing has been uploaded yet. Wraps
+  // GET /api/engagements/:id/briefing.
+  // -----------------------------------------------------------------
+  server.tool(
+    "codex_briefing_fetch",
+    "Codex (plan review): fetch the parcel briefing for an engagement. " +
+      "Returns the briefing wire shape or { briefing: null } when no briefing has been uploaded " +
+      "yet. A 404 means the engagement id is unknown (input error, not empty result). " +
+      "Requires a Codex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement to fetch the briefing for. Required."),
+    },
+    async ({ engagement_id }) => {
+      const gate = requireProduct("codex_briefing_fetch", "codex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.fetchBriefing({
+          engagementId: engagement_id,
+        });
+        logger.info("tool_call", {
+          tool: "codex_briefing_fetch",
+          engagement_id,
+          tier,
+          has_briefing: response.briefing !== null,
+        });
+        const provenance = response.briefing
+          ? codexProvenance({
+              atomKind: "parcel-briefing",
+              rowId: engagement_id,
+              jurisdictionTenant: "legacy",
+              sourcePath: `/api/engagements/${engagement_id}/briefing`,
+            })
+          : null;
+        return envelopeContent(codexEnvelope(response, provenance, { tier }));
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("codex_briefing_fetch", err),
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Codex tool 4: codex_snapshot_ingest
+  // Records that a plan-review package has been submitted to the
+  // jurisdiction. Wraps POST /api/engagements/:id/submissions.
+  // Downstream pipelines (auto-trigger classification + auto-trigger
+  // finding generation) fire automatically against the inserted row.
+  //
+  // Naming note: the Lane B dispatch named this tool snapshot_ingest
+  // matching its "PDF + metadata snapshot" intent. The legacy backend's
+  // /snapshots route is Cortex-side (Revit add-in model snapshots); the
+  // Codex-side analog is /engagements/:id/submissions. Surfacing as
+  // codex_snapshot_ingest preserves dispatch naming while wrapping the
+  // correct endpoint. Flagged in session summary for planner ratification.
+  // -----------------------------------------------------------------
+  server.tool(
+    "codex_snapshot_ingest",
+    "Codex (plan review): record a plan-review submission against an engagement. The legacy " +
+      "backend auto-triggers classification + finding generation downstream from the inserted " +
+      "row; chain into codex_finding_generation if you want to poll status explicitly. " +
+      "Optional discipline tag filters the canned-finding library on the reviewer side. " +
+      "Requires a Codex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe(
+          "UUID of the engagement this submission belongs to. Required.",
+        ),
+      note: z
+        .string()
+        .max(2048)
+        .optional()
+        .describe(
+          'Optional free-text note (e.g. "Permit set v1, all sheets cleaned."). 2KB cap; rejected with 400 if longer.',
+        ),
+      discipline: z
+        .enum(["building", "fire", "zoning", "civil"])
+        .optional()
+        .describe(
+          "Optional discipline tag. Drives the reviewer's canned-finding library default.",
+        ),
+    },
+    async ({ engagement_id, note, discipline }) => {
+      const gate = requireProduct("codex_snapshot_ingest", "codex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.createSubmission({
+          engagementId: engagement_id,
+          note,
+          discipline,
+        });
+        const submissionId =
+          typeof response.submission?.id === "string"
+            ? response.submission.id
+            : engagement_id;
+        logger.info("tool_call", {
+          tool: "codex_snapshot_ingest",
+          engagement_id,
+          submission_id: submissionId,
+          discipline,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            codexProvenance({
+              atomKind: "submission",
+              rowId: submissionId,
+              jurisdictionTenant: "legacy",
+              sourcePath: `/api/engagements/${engagement_id}/submissions`,
+            }),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("codex_snapshot_ingest", err),
+        );
       }
     },
   );

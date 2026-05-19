@@ -15,6 +15,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { AuthContext } from "./auth.js";
+import type { Product } from "./products.js";
 
 export const requestContext = new AsyncLocalStorage<AuthContext>();
 
@@ -23,4 +24,13 @@ type EnvelopeTier = "free_anonymous" | "free" | "developer_pro" | "team" | "embe
 export function getCurrentTier(): EnvelopeTier {
   const ctx = requestContext.getStore();
   return ctx?.tier ?? "free_anonymous";
+}
+
+// Default 'public' when no context is bound. A tool called outside the
+// request path (e.g. a unit test exercising the handler directly) sees
+// the public-substrate product, which is the conservative default since
+// the public catalog tools accept any product.
+export function getCurrentProduct(): Product {
+  const ctx = requestContext.getStore();
+  return ctx?.product ?? "public";
 }

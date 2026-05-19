@@ -215,3 +215,60 @@ export function searchPermitAtomsEnvelope(
 ): ToolEnvelope<QueryJurisdictionResponse> {
   return queryJurisdictionEnvelope(response, options);
 }
+
+// -----------------------------------------------------------------
+// Codex envelope (Lane B sprint 2).
+//
+// Codex tools wrap legacy-design-tools endpoints whose responses are
+// already-shaped finding / briefing / submission rows. Those rows carry
+// row ids (uuids) rather than Hauska atom DIDs at the wire layer today;
+// the legacy `submission.atom.ts`, `finding.atom.ts`, and
+// `parcel-briefing.atom.ts` registrations exist server-side but the
+// HTTP routes return the row form, not the atom form.
+//
+// We surface a uniform envelope shape: original legacy payload under
+// `data`, a single synthetic provenance entry under `atoms` carrying
+// the legacy row id and the legacy endpoint URL as the source so agents
+// can cite the result, and the standard meta block. Free-tier
+// attribution does not apply (codex is Layer 2 paid) but the envelope
+// stays consistent for consumer ergonomics.
+// -----------------------------------------------------------------
+
+export interface CodexProvenanceParams {
+  atomKind:
+    | "finding-generation-run"
+    | "finding-override"
+    | "parcel-briefing"
+    | "submission";
+  rowId: string;
+  jurisdictionTenant: string;
+  sourcePath: string;
+}
+
+export function codexProvenance(
+  params: CodexProvenanceParams,
+): AtomProvenanceEntry {
+  return {
+    did: `legacy:${params.atomKind}:${params.rowId}`,
+    entityType: params.atomKind,
+    entityId: params.rowId,
+    jurisdictionTenant: params.jurisdictionTenant,
+    contentHash: null,
+    cidNote:
+      "Legacy backend row id; canonical Hauska DID materializes when the legacy atom-registry surfaces via the engine retrieval API.",
+    source: {
+      adapter: "legacy-design-tools",
+      url: params.sourcePath,
+      fetchedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export function codexEnvelope<T>(
+  data: T,
+  provenance: AtomProvenanceEntry | null,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<T> {
+  const atoms = provenance ? [provenance] : [];
+  return buildEnvelope(data, atoms, options);
+}
