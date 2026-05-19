@@ -253,9 +253,21 @@ export const hauskaClient = {
 
   async listJurisdictions(params?: {
     qualityBarOnly?: boolean;
+    /**
+     * Access-policy allow-list forwarded to the engine as a
+     * comma-separated `accessPolicies` query param. The engine applies
+     * the visibility partition at the storage layer per ADR-017. When
+     * omitted, the engine returns every jurisdiction (no filter). The
+     * MCP `list_jurisdictions` tool passes `["public-free"]` for
+     * unauthenticated callers.
+     */
+    accessPolicies?: ReadonlyArray<AccessPolicy>;
   }): Promise<ListJurisdictionsResponse> {
     const qs = new URLSearchParams();
     if (params?.qualityBarOnly) qs.set("qualityBarOnly", "true");
+    if (params?.accessPolicies && params.accessPolicies.length > 0) {
+      qs.set("accessPolicies", params.accessPolicies.join(","));
+    }
     const query = qs.toString();
     const path = `/jurisdictions${query ? `?${query}` : ""}`;
     return engineFetch<ListJurisdictionsResponse>(path);
