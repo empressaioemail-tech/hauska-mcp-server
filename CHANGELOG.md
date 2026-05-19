@@ -6,6 +6,37 @@ breaking changes are common until the 1.0.0 release.
 ## [Unreleased]
 
 ### Added
+- **Cortex tool surfaces (Lane B Group 2).** Four MCP tools wrapping
+  legacy-design-tools Cortex (design accelerator) endpoints under the
+  `cortex_*` namespace:
+  - `cortex_snapshot_register` → POST `/api/snapshots`. Discriminates on
+    `engagement_id` vs `project_name` body branch. Uses the
+    `x-snapshot-secret` service-auth path (already supported by the
+    legacy backend).
+  - `cortex_ifc_ingest` → POST `/api/snapshots/:id/ifc`. Accepts the IFC
+    file as base64; decodes to bytes; POSTs as `multipart/form-data`.
+    Documented size caveat: MCP JSON-RPC message envelopes are bounded
+    by client implementations. Known carry-over: IFC import has
+    unresolved failure modes per the 2026-05-19 sprint decision; tool
+    surfaces raw legacy responses.
+  - `cortex_bim_model_query` → GET `/api/engagements/:id/bim-model`.
+    Cookie-session-auth route; depends on the Lane C bearer-token
+    middleware (same gap as the Codex tools).
+  - `cortex_briefing_emit` → POST `/api/engagements/:id/briefing/generate`.
+    Normalizes the 409 briefing-generation-already-in-flight response
+    into `alreadyInFlight=true`. Cookie-session-auth route; depends on
+    Lane C bearer middleware.
+- **Two-auth-path legacy client.** `legacy-client.ts` now branches on
+  route family: `legacyFetch()` for bearer-auth routes
+  (`LEGACY_BACKEND_API_KEY`); `snapshotFetch()` for `x-snapshot-secret`
+  routes (`LEGACY_SNAPSHOT_SECRET`). Multipart construction for IFC
+  upload via `FormData` + `Blob`.
+- **17 new tests.** 15 in `tests/cortex-client.test.ts` (wire
+  conformance, snapshot-secret header path, FormData multipart shape,
+  409 briefing-emit normalization, bearer-vs-snapshot-secret branching).
+  2 in `tests/codex-tools.test.ts` (cortex-direction product-gate
+  semantics: cortex-product allows cortex tool; codex-product denied
+  for cortex tool).
 - **Codex tool surfaces (Lane B Group 1).** Four MCP tools wrapping
   legacy-design-tools Codex (plan-review) endpoints under the
   underscore-namespaced `codex_*` prefix:

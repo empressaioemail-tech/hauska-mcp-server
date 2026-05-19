@@ -91,6 +91,43 @@ test("requireProduct denies cross-product (cortex key cannot call codex tool)", 
   );
 });
 
+test("requireProduct allows cortex tool when bound product is cortex", () => {
+  withCtx(
+    {
+      tier: "developer_pro",
+      product: "cortex",
+      rate_limit_id: "test",
+      remaining_rpm: -1,
+      remaining_daily: -1,
+    },
+    () => {
+      const result = requireProduct("cortex_snapshot_register", "cortex");
+      assert.equal(result.ok, true);
+    },
+  );
+});
+
+test("requireProduct denies cortex tool when caller is codex-product", () => {
+  withCtx(
+    {
+      tier: "developer_pro",
+      product: "codex",
+      rate_limit_id: "test",
+      remaining_rpm: -1,
+      remaining_daily: -1,
+    },
+    () => {
+      const result = requireProduct("cortex_ifc_ingest", "cortex");
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        const message = result.content.content[0]?.text ?? "";
+        assert.match(message, /requires a "cortex"-product/);
+        assert.match(message, /product "codex"/);
+      }
+    },
+  );
+});
+
 test("codexProvenance produces a legacy-prefixed DID with canonical fields", () => {
   const entry = codexProvenance({
     atomKind: "finding-generation-run",

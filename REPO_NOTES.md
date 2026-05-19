@@ -136,18 +136,29 @@ The Inspector is browser-based; it opens a local URL printed to stdout.
   with forward slashes, which never matches on Windows. Patched
   2026-05-19 to normalize backslashes before the check.
 
-## Codex tool surfaces (Sprint 2 Group 1)
+## Codex + Cortex tool surfaces (Sprint 2 Groups 1 + 2)
 
-Four MCP tools wrap the legacy-design-tools api-server under the
-`codex_*` namespace. Per doc_repo
+Eight MCP tools wrap the legacy-design-tools api-server under the
+`codex_*` and `cortex_*` namespaces. Per doc_repo
 `_dispatches/2026-05-19_cc-agent-M_mcp_tool_surfaces.md`.
 
-| Tool | Method | Legacy endpoint |
-|---|---|---|
-| `codex_finding_generation` | POST | `/api/submissions/:submissionId/findings/generate` |
-| `codex_override_write` | POST | `/api/findings/:findingId/override` |
-| `codex_briefing_fetch` | GET | `/api/engagements/:id/briefing` |
-| `codex_snapshot_ingest` | POST | `/api/engagements/:id/submissions` |
+**Codex (plan review):**
+
+| Tool | Method | Legacy endpoint | Auth |
+|---|---|---|---|
+| `codex_finding_generation` | POST | `/api/submissions/:submissionId/findings/generate` | bearer |
+| `codex_override_write` | POST | `/api/findings/:findingId/override` | bearer |
+| `codex_briefing_fetch` | GET | `/api/engagements/:id/briefing` | bearer |
+| `codex_snapshot_ingest` | POST | `/api/engagements/:id/submissions` | bearer |
+
+**Cortex (design accelerator):**
+
+| Tool | Method | Legacy endpoint | Auth |
+|---|---|---|---|
+| `cortex_snapshot_register` | POST | `/api/snapshots` | x-snapshot-secret |
+| `cortex_ifc_ingest` | POST | `/api/snapshots/:id/ifc` (multipart) | x-snapshot-secret |
+| `cortex_bim_model_query` | GET | `/api/engagements/:id/bim-model` | bearer |
+| `cortex_briefing_emit` | POST | `/api/engagements/:id/briefing/generate` | bearer |
 
 ### Product dimension and auth
 
@@ -163,15 +174,24 @@ api_keys table.
 
 ### Cross-repo dependency on legacy-design-tools
 
-The legacy backend currently uses cookie-session auth via
-`requireReviewerAudience`. `legacy-client.ts` sends
-`Authorization: Bearer ${LEGACY_BACKEND_API_KEY}`. **The legacy backend
-needs a service-token middleware before these tools work end-to-end.**
-Flagged as a Lane C coordination item for cc-agent-C.
+Bearer-auth routes (`codex_*` and the two cookie-session Cortex tools)
+require a service-token middleware on the legacy backend; that work is
+a Lane C coordination item for cc-agent-C. `legacy-client.ts` sends
+`Authorization: Bearer ${LEGACY_BACKEND_API_KEY}` today and the legacy
+backend ignores the header (cookie-session via `requireReviewerAudience`
+/ `requireArchitectAudience`).
 
-Local end-to-end testing today requires the legacy backend's audience
-guard to be bypassed or stubbed. Unit-test coverage (23 new tests) is
-mocked-fetch only; integration coverage waits on Lane C wiring.
+Snapshot-secret routes (`cortex_snapshot_register`, `cortex_ifc_ingest`)
+already have a service-auth path in the legacy backend (the
+`x-snapshot-secret` header that the Revit add-in uses). The MCP server
+reuses that path via `LEGACY_SNAPSHOT_SECRET`. Those two tools work
+end-to-end today against any legacy backend that has the secret
+configured.
+
+Local end-to-end testing for the bearer-auth tools requires the legacy
+backend's audience guard to be bypassed or stubbed. Unit-test coverage
+(40 new tests across Groups 1 + 2) is mocked-fetch only; integration
+coverage for the bearer-auth tools waits on Lane C wiring.
 
 ## Pending follow-ups for cc-agent-M
 
@@ -181,10 +201,11 @@ mocked-fetch only; integration coverage waits on Lane C wiring.
 - Stream 2A nice-to-haves: response payload size cap, hauska-engine
   pagination support if list endpoints grow.
 - Stripe scaffold + self-serve signup (Stream 2B Phase 8).
-- **Cortex tool surfaces (Sprint 2 Group 2).** Four more tools mirroring
-  the Codex pattern: `cortex_ifc_ingest`, `cortex_bim_model_query`,
-  `cortex_snapshot_register`, `cortex_briefing_emit`.
 - **L1-L6 surface tools (Sprint 2 Group 3).** Gates per Sync B from
   Lane A.2 atom-shape locks (cc-agent-E).
 - **Visibility filter on `list_jurisdictions` (Sprint 2 Group 5).**
   Gates on Lane Foundation v1.1.0 publish (cc-agent-AC).
+- **Cross-client verification (Sprint 2 Group 4).** Once Groups 3 + 5
+  land, run MCP Inspector + Claude Desktop + Cursor probes across all
+  12+ tools and capture a session summary at
+  `_sessions/<date>_mcp_tool_cross_client_cc-agent-M.md`.
