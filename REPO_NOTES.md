@@ -239,6 +239,24 @@ until the poll completes and returns the refreshed status. The
 periodic background re-poll is a separate legacy-side runtime concern,
 out of MCP-tool scope per sprint Amendment 6.
 
+**L6 — deliverable-letter render:**
+
+| Tool | Method | Legacy endpoint (MCP-first) | Auth |
+|---|---|---|---|
+| `cortex_deliverable_letter_render` | POST | `/api/deliverable-letters/:id/renders` | bearer |
+| `cortex_deliverable_letter_renders_list` | GET | `/api/deliverable-letters/:id/renders` | bearer |
+
+`render` produces a first-class `deliverable-letter-render` atom (DOCX
+/ PDF) plus a download URL. The render is synchronous and gated
+server-side on completeness — an incomplete letter is rejected with a
+409 and the tool surfaces the missing sections (same shape as
+`cortex_deliverable_letter_send`). A letter is one-to-many with its
+renders; `renders_list` returns them newest-first.
+
+**Group 3 is complete** — all six L-surface MCP tool sets (L1-L6) are
+live. The next Lane B milestone is Group 4 (cross-client verification),
+which gates on cc-agent-C's Lane C.4 backend endpoints + UI existing.
+
 L-surface atoms carry the full BaseAtomInstance contract, so their
 provenance uses real `did:hauska:<type>:<id>` DIDs via
 `lSurfaceProvenance` — unlike the Groups 1+2 tools, which wrap legacy

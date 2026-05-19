@@ -2375,4 +2375,139 @@ export function registerTools(server: McpServer) {
       }
     },
   );
+
+  // -----------------------------------------------------------------
+  // Group 3 L6 — deliverable-letter render tools.
+  //
+  // The rendered DOCX/PDF artifact of an L3 deliverable-letter, as a
+  // first-class atom. Render is synchronous and completeness-gated
+  // server-side (an incomplete letter cannot be rendered — that would
+  // produce a confusing partial document). MCP-first contract built
+  // to match by cc-agent-C in Lane C.4. Gate: product='cortex'.
+  // This phase closes Group 3 — all six L-surface MCP tool sets live.
+  // -----------------------------------------------------------------
+
+  // L6 tool 1: cortex_deliverable_letter_render
+  server.tool(
+    "cortex_deliverable_letter_render",
+    "Cortex (design accelerator): render a deliverable letter to DOCX or PDF. Produces a " +
+      "first-class deliverable-letter-render atom (the render is queryable + provenance-pinned, " +
+      "not an ephemeral byte side-effect) and returns it plus a download URL for the rendered " +
+      "file. The render is gated on completeness — an incomplete letter (missing a cover, intro, " +
+      "or signature section) is rejected and the response names the missing sections. The render " +
+      "pins the source letter's version, so re-rendering after the letter changes produces a " +
+      "distinct render. Requires a Cortex-product API key.",
+    {
+      letter_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the deliverable letter to render. Required."),
+      format: z
+        .enum(["docx", "pdf"])
+        .describe("Render output format. Required."),
+      rendered_by_actor_id: z
+        .string()
+        .optional()
+        .describe("Actor who triggered the render (ADR-015). Omit for system renders."),
+    },
+    async ({ letter_id, format, rendered_by_actor_id }) => {
+      const gate = requireProduct("cortex_deliverable_letter_render", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.renderDeliverableLetter({
+          letterId: letter_id,
+          format,
+          renderedByActorId: rendered_by_actor_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_deliverable_letter_render",
+          letter_id,
+          format,
+          render_id: response.render.entityId,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.render),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        // A 409 here is the completeness gate (same shape as
+        // cortex_deliverable_letter_send). Surface the missing sections.
+        if (err instanceof LegacyHttpError && err.status === 409) {
+          let missing: unknown;
+          try {
+            missing = (JSON.parse(err.body) as { missing?: unknown }).missing;
+          } catch {
+            missing = undefined;
+          }
+          const missingNote = Array.isArray(missing)
+            ? ` Missing section(s): ${missing.join(", ")}.`
+            : "";
+          logger.warn("tool_legacy_http_error", {
+            tool: "cortex_deliverable_letter_render",
+            status: 409,
+            url: err.url,
+          });
+          return errorContent(
+            `cortex_deliverable_letter_render: the letter is not complete and cannot be rendered.${missingNote} ` +
+              "Add the missing sections with cortex_deliverable_letter_update_section, then retry.",
+          );
+        }
+        return errorContent(
+          describeLegacyFailure("cortex_deliverable_letter_render", err),
+        );
+      }
+    },
+  );
+
+  // L6 tool 2: cortex_deliverable_letter_renders_list
+  server.tool(
+    "cortex_deliverable_letter_renders_list",
+    "Cortex (design accelerator): list every render of a deliverable letter, newest-first. A " +
+      "letter is one-to-many with its renders — format changes and re-renders against an updated " +
+      "source letter each produce a distinct render atom. Requires a Cortex-product API key.",
+    {
+      letter_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the deliverable letter. Required."),
+    },
+    async ({ letter_id }) => {
+      const gate = requireProduct(
+        "cortex_deliverable_letter_renders_list",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.listDeliverableLetterRenders({
+          letterId: letter_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_deliverable_letter_renders_list",
+          letter_id,
+          count: response.renders.length,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            response.renders.map(lSurfaceProvenance),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure(
+            "cortex_deliverable_letter_renders_list",
+            err,
+          ),
+        );
+      }
+    },
+  );
 }
