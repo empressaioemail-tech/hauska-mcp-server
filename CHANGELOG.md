@@ -6,6 +6,26 @@ breaking changes are common until the 1.0.0 release.
 ## [Unreleased]
 
 ### Added
+- **Visibility filter on `list_jurisdictions` (Lane B Group 5).**
+  Unauthenticated (`free_anonymous`) callers see only jurisdictions
+  whose `accessPolicy` is `'public-free'` (or absent, treated as
+  public-free per the engine docstring). Authenticated callers see all
+  jurisdictions including `'platform-internal'` ones. Implements Path A
+  from the 2026-05-19 sprint pre-mortem: partnership-pending
+  jurisdictions (Smithville, Elgin, Bastrop County) ingest as internal
+  and stay hidden from the public catalog until partnership closes.
+- `@hauska/atom-contract` pin bumped from `^1.0.0` to `^1.1.0` to pick
+  up the `AccessPolicy` export from Lane Foundation v1.1.0 (cc-agent-AC
+  took Path R: reused the existing ADR-017 `accessPolicy` field).
+- `JurisdictionStatusSnapshot.accessPolicy` added to the
+  `hauska-client.ts` wire type. Optional; absent rows default to
+  `'public-free'` to preserve compatibility with pre-1.1.0 engine builds.
+- **8 new tests** in `tests/list-jurisdictions-visibility.test.ts`
+  covering the AccessPolicy import resolution, accessPolicy
+  pass-through on the wire, absent-field default, public-caller filter,
+  authenticated-caller pass-through, `public-paid` not-visible-to-public
+  rule, and the dispatch's Sync 4.5 scenario (Bastrop UDC + Grand
+  County public, three partnership-pending hidden).
 - **Cortex tool surfaces (Lane B Group 2).** Four MCP tools wrapping
   legacy-design-tools Cortex (design accelerator) endpoints under the
   `cortex_*` namespace:
