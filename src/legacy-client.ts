@@ -198,6 +198,100 @@ export interface ListResponseTasksResponse {
 }
 
 // -----------------------------------------------------------------
+// L2 sheet-content-extraction + attached-document wire types (Group 3).
+//
+// Hand-mirrored from `hauska-engine/packages/atoms` (Sync B(L2), engine
+// atoms package 0.2.0). Two atoms in one phase: they are coupled at the
+// producer — the sheet-ingest pass emits both. MCP-first contract: the
+// L2 endpoints below do not exist in legacy-design-tools yet; this
+// client defines them and cc-agent-C builds the matching routes in
+// Lane C.4.
+// -----------------------------------------------------------------
+
+/** Page-relative bounding box; coordinates normalized to [0, 1]. */
+export interface BoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type SheetAnnotationKind =
+  | "revision-cloud"
+  | "dimension"
+  | "schedule-row"
+  | "callout";
+
+export interface SheetTextSegment {
+  text: string;
+  boundingBox: BoundingBox;
+  sourceConfidence: number;
+}
+
+export interface SheetStructuredAnnotation {
+  kind: SheetAnnotationKind;
+  position: BoundingBox;
+  content: string;
+  sourceConfidence: number;
+}
+
+/** Full `sheet-content-extraction` atom instance (L2a). */
+export interface SheetContentExtractionAtom {
+  entityType: "sheet-content-extraction";
+  entityId: string;
+  jurisdictionTenant: string;
+  fetchedAt: string;
+  sourceAdapter: string;
+  sourceUrl: string;
+  contentHash: string;
+  sourceSheetId: string;
+  engagementId: string | null;
+  pageLabel: string;
+  extractedTextSegments: SheetTextSegment[];
+  structuredAnnotations: SheetStructuredAnnotation[];
+  ocrModel: string;
+  actorId: string | null;
+  accessPolicy?: string;
+}
+
+export type AttachedDocumentType =
+  | "specification"
+  | "calculation"
+  | "product-data"
+  | "narrative";
+
+/** Full `attached-document` atom instance (L2b). */
+export interface AttachedDocumentAtom {
+  entityType: "attached-document";
+  entityId: string;
+  jurisdictionTenant: string;
+  fetchedAt: string;
+  sourceAdapter: string;
+  sourceUrl: string;
+  contentHash: string;
+  engagementId: string;
+  title: string;
+  documentType: AttachedDocumentType;
+  extractedText: string;
+  originalBlobRef: string;
+  actorId: string | null;
+  accessPolicy?: string;
+}
+
+export interface SheetContentExtractionResponse {
+  // Null when the sheet has not been extracted yet (fetch before trigger).
+  sheetContentExtraction: SheetContentExtractionAtom | null;
+}
+
+export interface AttachedDocumentResponse {
+  attachedDocument: AttachedDocumentAtom;
+}
+
+export interface ListAttachedDocumentsResponse {
+  attachedDocuments: AttachedDocumentAtom[];
+}
+
+// -----------------------------------------------------------------
 // Error types — matched to hauska-client.ts conventions so tool
 // handlers can use a uniform error shape across both backends.
 // -----------------------------------------------------------------
@@ -716,6 +810,87 @@ export const legacyClient = {
     const { body } = await legacyFetch<ResponseTaskResponse>(
       `/api/response-tasks/${encodeURIComponent(params.responseTaskId)}/link-finding`,
       { method: "POST", jsonBody: { findingId: params.findingId } },
+    );
+    return body;
+  },
+
+  // -----------------------------------------------------------------
+  // L2 sheet-content-extraction + attached-document methods (Group 3).
+  // MCP-first contract — built to match by cc-agent-C in Lane C.4. All
+  // bearer-auth.
+  // -----------------------------------------------------------------
+
+  /**
+   * POST /api/sheets/:sheetId/content-extraction
+   *
+   * Triggers the structured-content extraction pass (OCR text segments
+   * + structured annotations) against a sheet. The legacy backend runs
+   * the extraction and emits a `sheet-content-extraction` atom. Returns
+   * the produced atom.
+   */
+  async triggerSheetContentExtraction(params: {
+    sheetId: string;
+  }): Promise<SheetContentExtractionResponse> {
+    const { body } = await legacyFetch<SheetContentExtractionResponse>(
+      `/api/sheets/${encodeURIComponent(params.sheetId)}/content-extraction`,
+      { method: "POST", jsonBody: {} },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/sheets/:sheetId/content-extraction
+   *
+   * Fetches the `sheet-content-extraction` atom for a sheet. Returns
+   * `{ sheetContentExtraction: null }` when the sheet has not been
+   * extracted yet — that is a normal empty result, not an error.
+   */
+  async fetchSheetContentExtraction(params: {
+    sheetId: string;
+  }): Promise<SheetContentExtractionResponse> {
+    const { body } = await legacyFetch<SheetContentExtractionResponse>(
+      `/api/sheets/${encodeURIComponent(params.sheetId)}/content-extraction`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/engagements/:engagementId/attached-documents
+   *
+   * Lists the supporting documents attached to an engagement,
+   * optionally filtered to one document type.
+   */
+  async listAttachedDocuments(params: {
+    engagementId: string;
+    documentType?: AttachedDocumentType;
+  }): Promise<ListAttachedDocumentsResponse> {
+    const qs = new URLSearchParams();
+    if (params.documentType !== undefined) {
+      qs.set("documentType", params.documentType);
+    }
+    const query = qs.toString();
+    const { body } = await legacyFetch<ListAttachedDocumentsResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/attached-documents${
+        query ? `?${query}` : ""
+      }`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/attached-documents/:attachedDocumentId
+   *
+   * Fetches a single attached-document atom, including its parsed
+   * `extractedText` and the `originalBlobRef` to the stored original.
+   */
+  async fetchAttachedDocument(params: {
+    attachedDocumentId: string;
+  }): Promise<AttachedDocumentResponse> {
+    const { body } = await legacyFetch<AttachedDocumentResponse>(
+      `/api/attached-documents/${encodeURIComponent(params.attachedDocumentId)}`,
+      { method: "GET" },
     );
     return body;
   },

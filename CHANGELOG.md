@@ -6,6 +6,18 @@ breaking changes are common until the 1.0.0 release.
 ## [Unreleased]
 
 ### Added
+- **Group 3 L2 — sheet-content-extraction + attached-document tools.**
+  Four MCP tools for the L2 surface (two coupled atoms, emitted
+  together by the sheet-ingest pass):
+  - `cortex_sheet_content_extraction_trigger` → `POST /api/sheets/:id/content-extraction`
+  - `cortex_sheet_content_extraction_fetch` → `GET /api/sheets/:id/content-extraction`
+  - `cortex_attached_document_list` → `GET /api/engagements/:id/attached-documents`
+  - `cortex_attached_document_fetch` → `GET /api/attached-documents/:id`
+
+  Same MCP-first contract as L1: legacy endpoints built to match by
+  cc-agent-C in Lane C.4; mocked-fetch testable now, e2e blocked on
+  Lane C.4. Gate: `product='cortex'`. 11 new tests in
+  `tests/cortex-sheet-content.test.ts`.
 - **Group 3 L1 — response-task tools (`cortex_response_task_*`).** Four
   MCP tools for the L1 response-task surface:
   - `cortex_response_task_create` → `POST /api/engagements/:id/response-tasks`

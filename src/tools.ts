@@ -1251,4 +1251,191 @@ export function registerTools(server: McpServer) {
       }
     },
   );
+
+  // -----------------------------------------------------------------
+  // Group 3 L2 — sheet-content-extraction + attached-document tools.
+  //
+  // Two coupled atoms (emitted together by the sheet-ingest pass).
+  // MCP-first contract built to match by cc-agent-C in Lane C.4.
+  // Gate: product='cortex'. Provenance via lSurfaceProvenance.
+  // -----------------------------------------------------------------
+
+  // L2 tool 1: cortex_sheet_content_extraction_trigger
+  server.tool(
+    "cortex_sheet_content_extraction_trigger",
+    "Cortex (design accelerator): trigger the structured-content extraction pass on a sheet. " +
+      "The backend runs OCR plus structured-annotation extraction (revision clouds, dimensions, " +
+      "schedule rows, callouts) and produces a sheet-content-extraction atom. Returns the " +
+      "produced atom. Requires a Cortex-product API key.",
+    {
+      sheet_id: z
+        .string()
+        .min(1)
+        .describe(
+          "entityId / blob ref of the source sheet to extract. Required.",
+        ),
+    },
+    async ({ sheet_id }) => {
+      const gate = requireProduct(
+        "cortex_sheet_content_extraction_trigger",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.triggerSheetContentExtraction({
+          sheetId: sheet_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_sheet_content_extraction_trigger",
+          sheet_id,
+          extracted: response.sheetContentExtraction !== null,
+          tier,
+        });
+        const provenance = response.sheetContentExtraction
+          ? lSurfaceProvenance(response.sheetContentExtraction)
+          : null;
+        return envelopeContent(codexEnvelope(response, provenance, { tier }));
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure(
+            "cortex_sheet_content_extraction_trigger",
+            err,
+          ),
+        );
+      }
+    },
+  );
+
+  // L2 tool 2: cortex_sheet_content_extraction_fetch
+  server.tool(
+    "cortex_sheet_content_extraction_fetch",
+    "Cortex (design accelerator): fetch the sheet-content-extraction atom for a sheet — the " +
+      "OCR text segments and structured annotations produced by a prior extraction pass. " +
+      "Returns { sheetContentExtraction: null } when the sheet has not been extracted yet " +
+      "(call cortex_sheet_content_extraction_trigger first). Requires a Cortex-product API key.",
+    {
+      sheet_id: z
+        .string()
+        .min(1)
+        .describe("entityId / blob ref of the sheet. Required."),
+    },
+    async ({ sheet_id }) => {
+      const gate = requireProduct(
+        "cortex_sheet_content_extraction_fetch",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.fetchSheetContentExtraction({
+          sheetId: sheet_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_sheet_content_extraction_fetch",
+          sheet_id,
+          found: response.sheetContentExtraction !== null,
+          tier,
+        });
+        const provenance = response.sheetContentExtraction
+          ? lSurfaceProvenance(response.sheetContentExtraction)
+          : null;
+        return envelopeContent(codexEnvelope(response, provenance, { tier }));
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_sheet_content_extraction_fetch", err),
+        );
+      }
+    },
+  );
+
+  // L2 tool 3: cortex_attached_document_list
+  server.tool(
+    "cortex_attached_document_list",
+    "Cortex (design accelerator): list the supporting documents attached to an engagement " +
+      "(specifications, calculations, product-data sheets, design narratives). Optionally " +
+      "filter to a single document type. Returns atom metadata; call " +
+      "cortex_attached_document_fetch for a document's parsed text. Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement. Required."),
+      document_type: z
+        .enum(["specification", "calculation", "product-data", "narrative"])
+        .optional()
+        .describe(
+          "Optional document-type filter. Omit to list every attached document.",
+        ),
+    },
+    async ({ engagement_id, document_type }) => {
+      const gate = requireProduct("cortex_attached_document_list", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.listAttachedDocuments({
+          engagementId: engagement_id,
+          documentType: document_type,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_attached_document_list",
+          engagement_id,
+          document_type,
+          count: response.attachedDocuments.length,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            response.attachedDocuments.map(lSurfaceProvenance),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_attached_document_list", err),
+        );
+      }
+    },
+  );
+
+  // L2 tool 4: cortex_attached_document_fetch
+  server.tool(
+    "cortex_attached_document_fetch",
+    "Cortex (design accelerator): fetch a single attached-document atom by id, including its " +
+      "parsed extracted text and the reference to the stored original blob. Requires a " +
+      "Cortex-product API key.",
+    {
+      attached_document_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the attached-document atom. Required."),
+    },
+    async ({ attached_document_id }) => {
+      const gate = requireProduct("cortex_attached_document_fetch", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.fetchAttachedDocument({
+          attachedDocumentId: attached_document_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_attached_document_fetch",
+          attached_document_id,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.attachedDocument),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_attached_document_fetch", err),
+        );
+      }
+    },
+  );
 }

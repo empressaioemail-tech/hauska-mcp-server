@@ -178,6 +178,15 @@ lives in doc_repo `_research/2026-05-19_l_surface_endpoint_contracts_cc-agent-M.
 | `cortex_response_task_list` | GET | `/api/engagements/:id/response-tasks` | bearer |
 | `cortex_response_task_link` | POST | `/api/response-tasks/:id/link-finding` | bearer |
 
+**L2 — sheet-content-extraction + attached-document:**
+
+| Tool | Method | Legacy endpoint (MCP-first) | Auth |
+|---|---|---|---|
+| `cortex_sheet_content_extraction_trigger` | POST | `/api/sheets/:id/content-extraction` | bearer |
+| `cortex_sheet_content_extraction_fetch` | GET | `/api/sheets/:id/content-extraction` | bearer |
+| `cortex_attached_document_list` | GET | `/api/engagements/:id/attached-documents` | bearer |
+| `cortex_attached_document_fetch` | GET | `/api/attached-documents/:id` | bearer |
+
 L-surface atoms carry the full BaseAtomInstance contract, so their
 provenance uses real `did:hauska:<type>:<id>` DIDs via
 `lSurfaceProvenance` — unlike the Groups 1+2 tools, which wrap legacy
