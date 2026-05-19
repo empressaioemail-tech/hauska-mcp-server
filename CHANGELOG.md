@@ -5,6 +5,20 @@ breaking changes are common until the 1.0.0 release.
 
 ## [Unreleased]
 
+### Changed
+- **`list_jurisdictions` visibility filter moved engine-side.** The
+  Group 5 filter previously ran client-side in the MCP server (fetch
+  all jurisdictions, then drop non-public ones). The engine retrieval
+  API gained an `accessPolicies` query param (hauska-engine PR #7), so
+  the MCP server now forwards `accessPolicies=public-free` for
+  unauthenticated callers and lets the engine apply the partition at
+  the storage layer. Authenticated callers send no filter. New
+  exported helper `accessPoliciesForTier(tier)` in `tools.ts` selects
+  the allow-list; `hauska-client.ts` `listJurisdictions` gained an
+  `accessPolicies` parameter encoded as a comma-separated query value.
+  Behavior is unchanged for callers; this is a cleaner shape that
+  avoids transferring hidden jurisdictions over the wire.
+
 ### Added
 - **Group 3 L2 — sheet-content-extraction + attached-document tools.**
   Four MCP tools for the L2 surface (two coupled atoms, emitted

@@ -11,6 +11,7 @@
 //   5. Tier-aware behavior reads from request-scoped AsyncLocalStorage so
 //      tool handlers do not need access to the Express request.
 
+import type { AccessPolicy } from "@hauska/atom-contract";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
@@ -112,6 +113,20 @@ function describeLegacyFailure(tool: string, err: unknown): string {
   }
   logger.error("tool_unknown_error", { tool, error: String(err) });
   return `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`;
+}
+
+// Visibility partition for `list_jurisdictions`. Unauthenticated
+// (free_anonymous) callers get the `["public-free"]` allow-list, which
+// the engine applies at the storage layer (snapshots with an absent
+// `accessPolicy` are treated as public-free engine-side). Authenticated
+// callers get `undefined` — no filter, every jurisdiction including
+// partnership-pending `platform-internal` ones.
+//
+// Exported for direct testing without a full McpServer round-trip.
+export function accessPoliciesForTier(
+  tier: ReturnType<typeof getCurrentTier>,
+): ReadonlyArray<AccessPolicy> | undefined {
+  return tier === "free_anonymous" ? ["public-free"] : undefined;
 }
 
 // Product gate. Returns a 4xx-shaped error envelope when the caller's
@@ -375,35 +390,26 @@ export function registerTools(server: McpServer) {
     },
     async ({ quality_bar_only }) => {
       const tier = getCurrentTier();
+      // Visibility filter per Lane Foundation v1.1.0 and the 2026-05-19
+      // sprint pre-mortem Path A resolution. The partition is applied
+      // engine-side at the storage layer: unauthenticated callers send
+      // `accessPolicies=public-free`, authenticated callers send no
+      // filter. Replaces the prior client-side filter shim now that the
+      // engine retrieval API exposes the `accessPolicies` query param.
+      const accessPolicies = accessPoliciesForTier(tier);
       try {
         const response = await hauskaClient.listJurisdictions({
           qualityBarOnly: quality_bar_only,
+          ...(accessPolicies !== undefined ? { accessPolicies } : {}),
         });
-        // Visibility filter per Lane Foundation v1.1.0 and the
-        // 2026-05-19 sprint pre-mortem Path A resolution. Unauthenticated
-        // (free_anonymous) callers only see jurisdictions whose
-        // `accessPolicy` is `public-free` (or absent ⇒ treated as
-        // public-free per the engine docstring). Authenticated callers
-        // see all jurisdictions including partnership-pending ones.
-        const isPublicCaller = tier === "free_anonymous";
-        const filtered = isPublicCaller
-          ? {
-              jurisdictions: response.jurisdictions.filter(
-                (j) =>
-                  j.accessPolicy === undefined ||
-                  j.accessPolicy === "public-free",
-              ),
-            }
-          : response;
         logger.info("tool_call", {
           tool: "list_jurisdictions",
           tier,
-          count: filtered.jurisdictions.length,
-          total_count: response.jurisdictions.length,
-          filtered_out: response.jurisdictions.length - filtered.jurisdictions.length,
+          count: response.jurisdictions.length,
+          public_filtered: accessPolicies !== undefined,
           quality_bar_only,
         });
-        return envelopeContent(listJurisdictionsEnvelope(filtered, { tier }));
+        return envelopeContent(listJurisdictionsEnvelope(response, { tier }));
       } catch (err) {
         return errorContent(describeEngineFailure("list_jurisdictions", err));
       }
