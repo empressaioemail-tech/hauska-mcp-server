@@ -140,6 +140,64 @@ export interface BriefingEmitResponse {
 }
 
 // -----------------------------------------------------------------
+// L1 response-task wire types (Lane B Group 3).
+//
+// Hand-mirrored from `hauska-engine/packages/atoms` `ResponseTaskAtomInstance`
+// (Sync B(L1), engine atoms package 0.1.0). Mirrored rather than imported:
+// `@hauska-engine/atoms` is an engine workspace package, not published to
+// npm; pulling it into the mcp-server build graph is out of scope. If the
+// engine atom shape drifts, the mismatch surfaces as a type error in the
+// L1 tool handlers.
+//
+// MCP-FIRST CONTRACT. The L1 endpoints below do not exist in
+// legacy-design-tools yet. This client defines the contract; cc-agent-C
+// builds the matching legacy routes in Lane C.4. Until then the L1 tools
+// are mocked-fetch testable only — e2e is blocked on Lane C.4 (the same
+// shape as Groups 1+2 being e2e-blocked on the Lane C bearer middleware).
+// -----------------------------------------------------------------
+
+export type ResponseTaskState =
+  | "open"
+  | "in-progress"
+  | "done"
+  | "cancelled";
+
+/**
+ * Full `response-task` atom instance returned by the L1 endpoints.
+ * Conforms to the engine's `ResponseTaskAtomInstance` /
+ * `RESPONSE_TASK_SCHEMA`.
+ */
+export interface ResponseTaskAtom {
+  entityType: "response-task";
+  entityId: string;
+  jurisdictionTenant: string;
+  fetchedAt: string;
+  sourceAdapter: string;
+  sourceUrl: string;
+  contentHash: string;
+  title: string;
+  description: string;
+  state: ResponseTaskState;
+  createdAt: string;
+  dueAt: string | null;
+  completedAt: string | null;
+  sourceClientCommentId: string | null;
+  findingId: string | null;
+  engagementId: string | null;
+  actorId: string | null;
+  principalActorId: string | null;
+  accessPolicy?: string;
+}
+
+export interface ResponseTaskResponse {
+  responseTask: ResponseTaskAtom;
+}
+
+export interface ListResponseTasksResponse {
+  responseTasks: ResponseTaskAtom[];
+}
+
+// -----------------------------------------------------------------
 // Error types — matched to hauska-client.ts conventions so tool
 // handlers can use a uniform error shape across both backends.
 // -----------------------------------------------------------------
@@ -556,5 +614,109 @@ export const legacyClient = {
       }
       throw err;
     }
+  },
+
+  // -----------------------------------------------------------------
+  // L1 response-task methods (Group 3). MCP-first contract — these
+  // endpoints are defined here and built to match by cc-agent-C in
+  // Lane C.4. All bearer-auth; depend on the Lane C service-token
+  // middleware for e2e.
+  // -----------------------------------------------------------------
+
+  /**
+   * POST /api/engagements/:engagementId/response-tasks
+   *
+   * Creates a response-task within an engagement. The legacy backend
+   * assigns `entityId`, sets `state` to `"open"`, stamps `createdAt`,
+   * and records the `response-task-opened` audit event. Returns the
+   * full response-task atom instance.
+   */
+  async createResponseTask(params: {
+    engagementId: string;
+    title: string;
+    description: string;
+    sourceClientCommentId?: string;
+    findingId?: string;
+    dueAt?: string;
+    actorId?: string;
+    principalActorId?: string;
+  }): Promise<ResponseTaskResponse> {
+    const jsonBody: Record<string, unknown> = {
+      title: params.title,
+      description: params.description,
+    };
+    if (params.sourceClientCommentId !== undefined) {
+      jsonBody.sourceClientCommentId = params.sourceClientCommentId;
+    }
+    if (params.findingId !== undefined) jsonBody.findingId = params.findingId;
+    if (params.dueAt !== undefined) jsonBody.dueAt = params.dueAt;
+    if (params.actorId !== undefined) jsonBody.actorId = params.actorId;
+    if (params.principalActorId !== undefined) {
+      jsonBody.principalActorId = params.principalActorId;
+    }
+    const { body } = await legacyFetch<ResponseTaskResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/response-tasks`,
+      { method: "POST", jsonBody },
+    );
+    return body;
+  },
+
+  /**
+   * POST /api/response-tasks/:responseTaskId/state
+   *
+   * Transitions a response-task to a new state. The legacy backend
+   * validates the transition, stamps `completedAt` when the new state
+   * is `"done"`, and records the matching audit event
+   * (response-task-progressed / -completed). A forbidden transition
+   * surfaces as a 409.
+   */
+  async updateResponseTaskState(params: {
+    responseTaskId: string;
+    state: ResponseTaskState;
+  }): Promise<ResponseTaskResponse> {
+    const { body } = await legacyFetch<ResponseTaskResponse>(
+      `/api/response-tasks/${encodeURIComponent(params.responseTaskId)}/state`,
+      { method: "POST", jsonBody: { state: params.state } },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/engagements/:engagementId/response-tasks
+   *
+   * Lists response-tasks for an engagement, optionally filtered to a
+   * single state. Returns the full atom instances newest-first.
+   */
+  async listResponseTasks(params: {
+    engagementId: string;
+    state?: ResponseTaskState;
+  }): Promise<ListResponseTasksResponse> {
+    const qs = new URLSearchParams();
+    if (params.state !== undefined) qs.set("state", params.state);
+    const query = qs.toString();
+    const { body } = await legacyFetch<ListResponseTasksResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/response-tasks${
+        query ? `?${query}` : ""
+      }`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * POST /api/response-tasks/:responseTaskId/link-finding
+   *
+   * Links a response-task to a finding by setting the atom's
+   * `findingId`. Returns the updated response-task atom.
+   */
+  async linkResponseTaskFinding(params: {
+    responseTaskId: string;
+    findingId: string;
+  }): Promise<ResponseTaskResponse> {
+    const { body } = await legacyFetch<ResponseTaskResponse>(
+      `/api/response-tasks/${encodeURIComponent(params.responseTaskId)}/link-finding`,
+      { method: "POST", jsonBody: { findingId: params.findingId } },
+    );
+    return body;
   },
 };

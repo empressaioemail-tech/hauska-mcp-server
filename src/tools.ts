@@ -20,6 +20,7 @@ import {
   codexProvenance,
   getAtomEnvelope,
   listJurisdictionsEnvelope,
+  lSurfaceProvenance,
   queryJurisdictionEnvelope,
   searchAtomsEnvelope,
   searchPermitAtomsEnvelope,
@@ -1004,6 +1005,254 @@ export function registerTools(server: McpServer) {
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_briefing_emit", err),
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Group 3 L1 — response-task tools (cortex_response_task_*).
+  //
+  // Wraps the L1 response-task endpoints on legacy-design-tools. These
+  // endpoints are an MCP-first contract defined in legacy-client.ts and
+  // built to match by cc-agent-C in Lane C.4 — until then the tools are
+  // mocked-fetch testable only. Atoms carry real did:hauska DIDs, so
+  // provenance uses lSurfaceProvenance, not the synthetic codexProvenance
+  // path the Groups 1+2 tools use. Gate: product='cortex'.
+  // -----------------------------------------------------------------
+
+  // L1 tool 1: cortex_response_task_create
+  server.tool(
+    "cortex_response_task_create",
+    "Cortex (design accelerator): create a response-task within an engagement. A response-task " +
+      "tracks a unit of architect follow-up work, typically created from a client comment. " +
+      "The task starts in state \"open\". Optionally link it to a source client-comment atom " +
+      "and/or a finding at creation time. Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement this task belongs to. Required."),
+      title: z
+        .string()
+        .min(1)
+        .describe("Short human title shown in task lists. Required."),
+      description: z
+        .string()
+        .describe(
+          "Long-form task description. Pass an empty string for trivial tasks. Required.",
+        ),
+      source_client_comment_id: z
+        .string()
+        .optional()
+        .describe(
+          "entityId of the client-comment atom this task responds to. Omit for architect-authored tasks.",
+        ),
+      finding_id: z
+        .string()
+        .optional()
+        .describe(
+          "entityId of a finding to scope this task to. Omit for non-finding-scoped tasks.",
+        ),
+      due_at: z
+        .string()
+        .datetime()
+        .optional()
+        .describe("ISO-8601 deadline. Omit when there is no deadline."),
+      actor_id: z
+        .string()
+        .optional()
+        .describe("Actor assigned to execute the task (ADR-015)."),
+      principal_actor_id: z
+        .string()
+        .optional()
+        .describe(
+          "Actor accountable for the task; may differ from actor_id for delegated work.",
+        ),
+    },
+    async ({
+      engagement_id,
+      title,
+      description,
+      source_client_comment_id,
+      finding_id,
+      due_at,
+      actor_id,
+      principal_actor_id,
+    }) => {
+      const gate = requireProduct("cortex_response_task_create", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.createResponseTask({
+          engagementId: engagement_id,
+          title,
+          description,
+          sourceClientCommentId: source_client_comment_id,
+          findingId: finding_id,
+          dueAt: due_at,
+          actorId: actor_id,
+          principalActorId: principal_actor_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_response_task_create",
+          engagement_id,
+          response_task_id: response.responseTask.entityId,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.responseTask),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_response_task_create", err),
+        );
+      }
+    },
+  );
+
+  // L1 tool 2: cortex_response_task_update_state
+  server.tool(
+    "cortex_response_task_update_state",
+    "Cortex (design accelerator): transition a response-task to a new state. Valid states are " +
+      "open, in-progress, done, cancelled. The backend validates the transition and records an " +
+      "audit event; moving to \"done\" stamps the completion timestamp. A forbidden transition " +
+      "returns a 409 conflict. Requires a Cortex-product API key.",
+    {
+      response_task_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the response-task to transition. Required."),
+      state: z
+        .enum(["open", "in-progress", "done", "cancelled"])
+        .describe("Target state. Required."),
+    },
+    async ({ response_task_id, state }) => {
+      const gate = requireProduct(
+        "cortex_response_task_update_state",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.updateResponseTaskState({
+          responseTaskId: response_task_id,
+          state,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_response_task_update_state",
+          response_task_id,
+          state,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.responseTask),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_response_task_update_state", err),
+        );
+      }
+    },
+  );
+
+  // L1 tool 3: cortex_response_task_list
+  server.tool(
+    "cortex_response_task_list",
+    "Cortex (design accelerator): list the response-tasks for an engagement, newest-first. " +
+      "Optionally filter to a single state. Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement. Required."),
+      state: z
+        .enum(["open", "in-progress", "done", "cancelled"])
+        .optional()
+        .describe(
+          "Optional state filter. Omit to list response-tasks in every state.",
+        ),
+    },
+    async ({ engagement_id, state }) => {
+      const gate = requireProduct("cortex_response_task_list", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.listResponseTasks({
+          engagementId: engagement_id,
+          state,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_response_task_list",
+          engagement_id,
+          state,
+          count: response.responseTasks.length,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            response.responseTasks.map(lSurfaceProvenance),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_response_task_list", err),
+        );
+      }
+    },
+  );
+
+  // L1 tool 4: cortex_response_task_link
+  server.tool(
+    "cortex_response_task_link",
+    "Cortex (design accelerator): link a response-task to a finding by setting the task's " +
+      "finding reference. Use this when a task that was created standalone is later scoped to a " +
+      "specific finding. Requires a Cortex-product API key.",
+    {
+      response_task_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the response-task to link. Required."),
+      finding_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the finding to link the task to. Required."),
+    },
+    async ({ response_task_id, finding_id }) => {
+      const gate = requireProduct("cortex_response_task_link", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.linkResponseTaskFinding({
+          responseTaskId: response_task_id,
+          findingId: finding_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_response_task_link",
+          response_task_id,
+          finding_id,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.responseTask),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_response_task_link", err),
         );
       }
     },

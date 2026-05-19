@@ -20,6 +20,28 @@ breaking changes are common until the 1.0.0 release.
   avoids transferring hidden jurisdictions over the wire.
 
 ### Added
+- **Group 3 L1 — response-task tools (`cortex_response_task_*`).** Four
+  MCP tools for the L1 response-task surface:
+  - `cortex_response_task_create` → `POST /api/engagements/:id/response-tasks`
+  - `cortex_response_task_update_state` → `POST /api/response-tasks/:id/state`
+  - `cortex_response_task_list` → `GET /api/engagements/:id/response-tasks`
+  - `cortex_response_task_link` → `POST /api/response-tasks/:id/link-finding`
+
+  MCP-first contract: these legacy-design-tools endpoints do not exist
+  yet — `legacy-client.ts` defines the contract; cc-agent-C builds the
+  matching routes in Lane C.4. Tools are mocked-fetch testable now;
+  e2e is blocked on Lane C.4 (same shape as Groups 1+2 blocked on the
+  Lane C bearer middleware). Gate: `product='cortex'`.
+- **`lSurfaceProvenance` helper in `atom-shape.ts`.** L-surface atoms
+  (response-task and the rest of L1-L6) carry the full BaseAtomInstance
+  contract, so their provenance uses real `did:hauska:<type>:<id>` DIDs
+  rather than the synthetic `legacy:` identifier the Groups 1+2 tools
+  use. `codexEnvelope` now also accepts an array of provenance entries
+  for list-style tools.
+- **13 new tests** in `tests/cortex-response-task.test.ts` — L1
+  legacy-client wire conformance (URL shapes, request bodies, 409
+  rethrow, bearer header), the `lSurfaceProvenance` DID shape, and the
+  array-aware `codexEnvelope`.
 - **Visibility filter on `list_jurisdictions` (Lane B Group 5).**
   Unauthenticated (`free_anonymous`) callers see only jurisdictions
   whose `accessPolicy` is `'public-free'` (or absent, treated as
