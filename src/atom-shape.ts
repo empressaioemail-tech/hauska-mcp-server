@@ -266,9 +266,61 @@ export function codexProvenance(
 
 export function codexEnvelope<T>(
   data: T,
-  provenance: AtomProvenanceEntry | null,
+  provenance:
+    | AtomProvenanceEntry
+    | ReadonlyArray<AtomProvenanceEntry>
+    | null,
   options: BuildEnvelopeOptions,
 ): ToolEnvelope<T> {
-  const atoms = provenance ? [provenance] : [];
+  const atoms: AtomProvenanceEntry[] =
+    provenance === null
+      ? []
+      : Array.isArray(provenance)
+        ? [...provenance]
+        : [provenance as AtomProvenanceEntry];
   return buildEnvelope(data, atoms, options);
+}
+
+// -----------------------------------------------------------------
+// L-surface provenance (Lane B Group 3).
+//
+// The L1-L6 Cortex surfaces (response-task, sheet-content-extraction,
+// attached-document, deliverable-letter, detail-callout-spec,
+// product-spec-reference) carry the full BaseAtomInstance contract:
+// a real entityId, contentHash, source adapter/url, and fetched-at.
+// So unlike the Codex/Cortex existing-product tools (Groups 1+2),
+// which wrap legacy row shapes and use the synthetic `legacy:` did,
+// L-surface responses get a real `did:hauska:<entityType>:<entityId>`.
+//
+// `lSurfaceProvenance` accepts the BaseAtomInstance subset structurally
+// so it works against any L-surface atom type without importing the
+// engine atom package into the mcp-server build graph.
+// -----------------------------------------------------------------
+
+export interface LSurfaceAtomBase {
+  entityType: string;
+  entityId: string;
+  jurisdictionTenant: string;
+  contentHash: string;
+  sourceAdapter: string;
+  sourceUrl: string;
+  fetchedAt: string;
+}
+
+export function lSurfaceProvenance(
+  atom: LSurfaceAtomBase,
+): AtomProvenanceEntry {
+  return {
+    did: `did:hauska:${atom.entityType}:${atom.entityId}`,
+    entityType: atom.entityType,
+    entityId: atom.entityId,
+    jurisdictionTenant: atom.jurisdictionTenant,
+    contentHash: atom.contentHash,
+    cidNote: CID_NOTE,
+    source: {
+      adapter: atom.sourceAdapter,
+      url: atom.sourceUrl,
+      fetchedAt: atom.fetchedAt,
+    },
+  };
 }

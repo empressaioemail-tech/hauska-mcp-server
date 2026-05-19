@@ -160,6 +160,30 @@ Eight MCP tools wrap the legacy-design-tools api-server under the
 | `cortex_bim_model_query` | GET | `/api/engagements/:id/bim-model` | bearer |
 | `cortex_briefing_emit` | POST | `/api/engagements/:id/briefing/generate` | bearer |
 
+## Group 3 L-surface tools (Sprint 2 Group 3)
+
+L1-L6 surface tools per the dispatch. **MCP-first contract:** the
+legacy endpoints below do not exist in legacy-design-tools yet — the
+shapes are defined in `legacy-client.ts` and built to match by
+cc-agent-C in Lane C.4. Tools are mocked-fetch testable now; e2e is
+blocked on Lane C.4. The canonical endpoint contract for cc-agent-C
+lives in doc_repo `_research/2026-05-19_l_surface_endpoint_contracts_cc-agent-M.md`.
+
+**L1 — response-task (`cortex_response_task_*`):**
+
+| Tool | Method | Legacy endpoint (MCP-first) | Auth |
+|---|---|---|---|
+| `cortex_response_task_create` | POST | `/api/engagements/:id/response-tasks` | bearer |
+| `cortex_response_task_update_state` | POST | `/api/response-tasks/:id/state` | bearer |
+| `cortex_response_task_list` | GET | `/api/engagements/:id/response-tasks` | bearer |
+| `cortex_response_task_link` | POST | `/api/response-tasks/:id/link-finding` | bearer |
+
+L-surface atoms carry the full BaseAtomInstance contract, so their
+provenance uses real `did:hauska:<type>:<id>` DIDs via
+`lSurfaceProvenance` — unlike the Groups 1+2 tools, which wrap legacy
+row shapes and use the synthetic `legacy:` identifier via
+`codexProvenance`.
+
 ### Product dimension and auth
 
 `api_keys` carries a `product` column (`public` / `codex` / `cortex`),
