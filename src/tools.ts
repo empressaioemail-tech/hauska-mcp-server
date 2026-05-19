@@ -378,13 +378,31 @@ export function registerTools(server: McpServer) {
         const response = await hauskaClient.listJurisdictions({
           qualityBarOnly: quality_bar_only,
         });
+        // Visibility filter per Lane Foundation v1.1.0 and the
+        // 2026-05-19 sprint pre-mortem Path A resolution. Unauthenticated
+        // (free_anonymous) callers only see jurisdictions whose
+        // `accessPolicy` is `public-free` (or absent ⇒ treated as
+        // public-free per the engine docstring). Authenticated callers
+        // see all jurisdictions including partnership-pending ones.
+        const isPublicCaller = tier === "free_anonymous";
+        const filtered = isPublicCaller
+          ? {
+              jurisdictions: response.jurisdictions.filter(
+                (j) =>
+                  j.accessPolicy === undefined ||
+                  j.accessPolicy === "public-free",
+              ),
+            }
+          : response;
         logger.info("tool_call", {
           tool: "list_jurisdictions",
           tier,
-          count: response.jurisdictions.length,
+          count: filtered.jurisdictions.length,
+          total_count: response.jurisdictions.length,
+          filtered_out: response.jurisdictions.length - filtered.jurisdictions.length,
           quality_bar_only,
         });
-        return envelopeContent(listJurisdictionsEnvelope(response, { tier }));
+        return envelopeContent(listJurisdictionsEnvelope(filtered, { tier }));
       } catch (err) {
         return errorContent(describeEngineFailure("list_jurisdictions", err));
       }

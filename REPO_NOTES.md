@@ -203,8 +203,6 @@ coverage for the bearer-auth tools waits on Lane C wiring.
 - Stripe scaffold + self-serve signup (Stream 2B Phase 8).
 - **L1-L6 surface tools (Sprint 2 Group 3).** Gates per Sync B from
   Lane A.2 atom-shape locks (cc-agent-E).
-- **Visibility filter on `list_jurisdictions` (Sprint 2 Group 5).**
-  Gates on Lane Foundation v1.1.0 publish (cc-agent-AC).
 - **Cross-client verification (Sprint 2 Group 4).** Once Groups 3 + 5
   land, run MCP Inspector + Claude Desktop + Cursor probes across all
   12+ tools and capture a session summary at
