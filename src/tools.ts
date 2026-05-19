@@ -2130,4 +2130,249 @@ export function registerTools(server: McpServer) {
       }
     },
   );
+
+  // -----------------------------------------------------------------
+  // Group 3 L5 — product-spec-reference tools
+  // (cortex_product_spec_reference_*).
+  //
+  // A reference to an ICC-ES-evaluated product spec with live status
+  // (active / withdrawn / expired). The refresh tool triggers a
+  // synchronous backend re-poll of the ICC-ES listing; the periodic
+  // background re-poll is a separate legacy-side runtime concern.
+  // MCP-first contract built to match by cc-agent-C in Lane C.4.
+  // Gate: product='cortex'.
+  // -----------------------------------------------------------------
+
+  // L5 tool 1: cortex_product_spec_reference_create
+  server.tool(
+    "cortex_product_spec_reference_create",
+    "Cortex (design accelerator): add a product-spec reference to an engagement — an " +
+      "ICC-ES-evaluated product (identified by manufacturer + name) and its ESR number. The " +
+      "reference starts with status \"active\"; use cortex_product_spec_reference_refresh_status " +
+      "to re-verify it against the live ICC-ES listing. Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement this product reference belongs to. Required."),
+      product_name: z
+        .string()
+        .min(1)
+        .describe(
+          'Product name (e.g. "Strong-Drive SDWS Timber Screw"). Required.',
+        ),
+      manufacturer: z
+        .string()
+        .min(1)
+        .describe('Manufacturer (e.g. "Simpson Strong-Tie"). Required.'),
+      esr_number: z
+        .string()
+        .regex(
+          /^ESR-\d+$/,
+          'esr_number must be an ICC-ES report number of the form "ESR-<digits>", e.g. ESR-1234.',
+        )
+        .describe('ICC-ES Evaluation Service Report number (format "ESR-<digits>"). Required.'),
+      finding_id: z
+        .string()
+        .optional()
+        .describe("Source finding atom entityId that referenced this product, if any."),
+      response_task_id: z
+        .string()
+        .optional()
+        .describe("Source response-task atom entityId, if task-driven."),
+      actor_id: z
+        .string()
+        .optional()
+        .describe("Architect / staff member who added the reference (ADR-015)."),
+      principal_actor_id: z
+        .string()
+        .optional()
+        .describe("Actor accountable for the engagement; may differ from actor_id."),
+    },
+    async ({
+      engagement_id,
+      product_name,
+      manufacturer,
+      esr_number,
+      finding_id,
+      response_task_id,
+      actor_id,
+      principal_actor_id,
+    }) => {
+      const gate = requireProduct(
+        "cortex_product_spec_reference_create",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.createProductSpecReference({
+          engagementId: engagement_id,
+          product: { name: product_name, manufacturer },
+          esrNumber: esr_number,
+          findingId: finding_id,
+          responseTaskId: response_task_id,
+          actorId: actor_id,
+          principalActorId: principal_actor_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_product_spec_reference_create",
+          engagement_id,
+          esr_number,
+          reference_id: response.productSpecReference.entityId,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.productSpecReference),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_product_spec_reference_create", err),
+        );
+      }
+    },
+  );
+
+  // L5 tool 2: cortex_product_spec_reference_refresh_status
+  server.tool(
+    "cortex_product_spec_reference_refresh_status",
+    "Cortex (design accelerator): re-verify a product-spec reference against the live ICC-ES " +
+      "listing. The backend synchronously re-polls ICC-ES; if the status changed it appends to " +
+      "the reference's status history and updates the current status. Returns the refreshed " +
+      "reference — check `status` for active / withdrawn / expired. Requires a Cortex-product " +
+      "API key.",
+    {
+      reference_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the product-spec reference to refresh. Required."),
+    },
+    async ({ reference_id }) => {
+      const gate = requireProduct(
+        "cortex_product_spec_reference_refresh_status",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.refreshProductSpecReferenceStatus({
+          referenceId: reference_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_product_spec_reference_refresh_status",
+          reference_id,
+          status: response.productSpecReference.status,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.productSpecReference),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure(
+            "cortex_product_spec_reference_refresh_status",
+            err,
+          ),
+        );
+      }
+    },
+  );
+
+  // L5 tool 3: cortex_product_spec_reference_list
+  server.tool(
+    "cortex_product_spec_reference_list",
+    "Cortex (design accelerator): list the product-spec references for an engagement, optionally " +
+      "filtered to a single ICC-ES status. Filter to \"withdrawn\" or \"expired\" to surface " +
+      "references that need review. Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement. Required."),
+      status: z
+        .enum(["active", "withdrawn", "expired"])
+        .optional()
+        .describe("Optional ICC-ES status filter. Omit to list references in every status."),
+    },
+    async ({ engagement_id, status }) => {
+      const gate = requireProduct(
+        "cortex_product_spec_reference_list",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.listProductSpecReferences({
+          engagementId: engagement_id,
+          status,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_product_spec_reference_list",
+          engagement_id,
+          status,
+          count: response.productSpecReferences.length,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            response.productSpecReferences.map(lSurfaceProvenance),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_product_spec_reference_list", err),
+        );
+      }
+    },
+  );
+
+  // L5 tool 4: cortex_product_spec_reference_get
+  server.tool(
+    "cortex_product_spec_reference_get",
+    "Cortex (design accelerator): fetch a single product-spec-reference atom by id, including " +
+      "its current ICC-ES status and the full append-only status history. Requires a " +
+      "Cortex-product API key.",
+    {
+      reference_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the product-spec reference. Required."),
+    },
+    async ({ reference_id }) => {
+      const gate = requireProduct("cortex_product_spec_reference_get", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.getProductSpecReference({
+          referenceId: reference_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_product_spec_reference_get",
+          reference_id,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.productSpecReference),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_product_spec_reference_get", err),
+        );
+      }
+    },
+  );
 }

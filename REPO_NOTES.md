@@ -223,6 +223,22 @@ nested-`oneOf` JSON-Schema friction in MCP clients (same pattern as
 via `isLegalPushTransition`; an illegal transition returns a 409 and
 the tool surfaces the legal next states.
 
+**L5 — product-spec-reference:**
+
+| Tool | Method | Legacy endpoint (MCP-first) | Auth |
+|---|---|---|---|
+| `cortex_product_spec_reference_create` | POST | `/api/engagements/:id/product-spec-references` | bearer |
+| `cortex_product_spec_reference_refresh_status` | POST | `/api/product-spec-references/:id/refresh` | bearer |
+| `cortex_product_spec_reference_list` | GET | `/api/engagements/:id/product-spec-references` | bearer |
+| `cortex_product_spec_reference_get` | GET | `/api/product-spec-references/:id` | bearer |
+
+`create` takes a structured product identity (name + manufacturer) and
+a Zod-validated `ESR-<digits>` number. `refresh_status` triggers a
+synchronous backend re-poll of the ICC-ES listing — the tool blocks
+until the poll completes and returns the refreshed status. The
+periodic background re-poll is a separate legacy-side runtime concern,
+out of MCP-tool scope per sprint Amendment 6.
+
 L-surface atoms carry the full BaseAtomInstance contract, so their
 provenance uses real `did:hauska:<type>:<id>` DIDs via
 `lSurfaceProvenance` — unlike the Groups 1+2 tools, which wrap legacy
