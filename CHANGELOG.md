@@ -20,6 +20,22 @@ breaking changes are common until the 1.0.0 release.
   avoids transferring hidden jurisdictions over the wire.
 
 ### Added
+- **Group 3 L5 — product-spec-reference tools (`cortex_product_spec_reference_*`).**
+  Four MCP tools for the L5 product-spec-reference surface (ICC-ES-
+  evaluated products with live evaluation status):
+  - `cortex_product_spec_reference_create` → `POST /api/engagements/:id/product-spec-references`
+  - `cortex_product_spec_reference_refresh_status` → `POST /api/product-spec-references/:id/refresh`
+  - `cortex_product_spec_reference_list` → `GET /api/engagements/:id/product-spec-references`
+  - `cortex_product_spec_reference_get` → `GET /api/product-spec-references/:id`
+
+  `create` takes a structured product identity (name + manufacturer) and
+  a Zod-validated `ESR-<digits>` number. `refresh_status` triggers a
+  **synchronous** backend re-poll of the ICC-ES listing — the tool
+  blocks until the poll completes and returns the refreshed status; the
+  periodic background re-poll is a separate legacy-side runtime concern
+  (out of MCP-tool scope per sprint Amendment 6). Same MCP-first
+  contract as L1-L4. Gate: `product='cortex'`. 11 new tests in
+  `tests/cortex-product-spec-reference.test.ts`.
 - **Group 3 L4 — detail-callout-spec tools (`cortex_detail_callout_spec_*`).**
   Five MCP tools for the L4 detail-callout-spec surface (Revit detail
   callouts the Revit Connector pushes via APS Design Automation):

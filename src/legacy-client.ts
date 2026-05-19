@@ -428,6 +428,64 @@ export interface ListDetailCalloutSpecsResponse {
 }
 
 // -----------------------------------------------------------------
+// L5 product-spec-reference wire types (Lane B Group 3).
+//
+// Hand-mirrored from `hauska-engine/packages/atoms` (Sync B(L5), engine
+// atoms package 0.5.0). MCP-first contract: the L5 endpoints do not
+// exist in legacy-design-tools yet; this client defines them and
+// cc-agent-C builds the matching routes in Lane C.4.
+// -----------------------------------------------------------------
+
+export type ProductSpecStatus = "active" | "withdrawn" | "expired";
+
+/** ICC-ES ESR number format guard (`ESR-<digits>`). */
+export const ESR_NUMBER_RE = /^ESR-\d+$/;
+
+/** Structured product identity — never free-text. */
+export interface ProductIdentifier {
+  name: string;
+  manufacturer: string;
+}
+
+/** One entry in the append-only ESR-status-change chain. */
+export interface ProductSpecStatusChange {
+  status: ProductSpecStatus;
+  changedAt: string;
+  sourceUrl: string;
+}
+
+/** Full `product-spec-reference` atom instance returned by the L5 endpoints. */
+export interface ProductSpecReferenceAtom {
+  entityType: "product-spec-reference";
+  entityId: string;
+  jurisdictionTenant: string;
+  fetchedAt: string;
+  sourceAdapter: string;
+  sourceUrl: string;
+  contentHash: string;
+  product: ProductIdentifier;
+  esrNumber: string;
+  status: ProductSpecStatus;
+  lastVerifiedAt: string;
+  statusHistory: ProductSpecStatusChange[];
+  engagementId: string | null;
+  findingId: string | null;
+  responseTaskId: string | null;
+  createdAt: string;
+  actorId: string | null;
+  principalActorId: string | null;
+  accessPolicy?: string;
+}
+
+export interface ProductSpecReferenceResponse {
+  productSpecReference: ProductSpecReferenceAtom;
+}
+
+export interface ListProductSpecReferencesResponse {
+  productSpecReferences: ProductSpecReferenceAtom[];
+}
+
+// -----------------------------------------------------------------
 // Error types — matched to hauska-client.ts conventions so tool
 // handlers can use a uniform error shape across both backends.
 // -----------------------------------------------------------------
@@ -1295,6 +1353,106 @@ export const legacyClient = {
   }): Promise<DetailCalloutSpecResponse> {
     const { body } = await legacyFetch<DetailCalloutSpecResponse>(
       `/api/detail-callout-specs/${encodeURIComponent(params.specId)}`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  // -----------------------------------------------------------------
+  // L5 product-spec-reference methods (Group 3). MCP-first contract —
+  // built to match by cc-agent-C in Lane C.4. All bearer-auth.
+  // -----------------------------------------------------------------
+
+  /**
+   * POST /api/engagements/:engagementId/product-spec-references
+   *
+   * Creates a product-spec reference (an ICC-ES-evaluated product the
+   * engagement cites). The backend assigns `entityId`, sets `status`
+   * to `"active"`, stamps `createdAt` + `lastVerifiedAt`, initializes
+   * `statusHistory`, and records the creation event.
+   */
+  async createProductSpecReference(params: {
+    engagementId: string;
+    product: ProductIdentifier;
+    esrNumber: string;
+    findingId?: string;
+    responseTaskId?: string;
+    actorId?: string;
+    principalActorId?: string;
+  }): Promise<ProductSpecReferenceResponse> {
+    const jsonBody: Record<string, unknown> = {
+      product: params.product,
+      esrNumber: params.esrNumber,
+    };
+    if (params.findingId !== undefined) jsonBody.findingId = params.findingId;
+    if (params.responseTaskId !== undefined) {
+      jsonBody.responseTaskId = params.responseTaskId;
+    }
+    if (params.actorId !== undefined) jsonBody.actorId = params.actorId;
+    if (params.principalActorId !== undefined) {
+      jsonBody.principalActorId = params.principalActorId;
+    }
+    const { body } = await legacyFetch<ProductSpecReferenceResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/product-spec-references`,
+      { method: "POST", jsonBody },
+    );
+    return body;
+  },
+
+  /**
+   * POST /api/product-spec-references/:referenceId/refresh
+   *
+   * Triggers a synchronous backend re-poll of the ICC-ES listing. The
+   * legacy backend fetches the ICC-ES page (typically fast, HTML-
+   * scrapable), and if the status changed appends a new entry to
+   * `statusHistory` and updates `status` + `lastVerifiedAt`. The call
+   * blocks until the poll completes; the periodic background re-poll is
+   * a separate legacy-side runtime concern (out of MCP-tool scope per
+   * sprint Amendment 6). Returns the refreshed atom.
+   */
+  async refreshProductSpecReferenceStatus(params: {
+    referenceId: string;
+  }): Promise<ProductSpecReferenceResponse> {
+    const { body } = await legacyFetch<ProductSpecReferenceResponse>(
+      `/api/product-spec-references/${encodeURIComponent(params.referenceId)}/refresh`,
+      { method: "POST", jsonBody: {} },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/engagements/:engagementId/product-spec-references
+   *
+   * Lists the product-spec references for an engagement, optionally
+   * filtered to a single ICC-ES status.
+   */
+  async listProductSpecReferences(params: {
+    engagementId: string;
+    status?: ProductSpecStatus;
+  }): Promise<ListProductSpecReferencesResponse> {
+    const qs = new URLSearchParams();
+    if (params.status !== undefined) qs.set("status", params.status);
+    const query = qs.toString();
+    const { body } = await legacyFetch<ListProductSpecReferencesResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/product-spec-references${
+        query ? `?${query}` : ""
+      }`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/product-spec-references/:referenceId
+   *
+   * Fetches a single product-spec-reference atom, including its full
+   * append-only `statusHistory`.
+   */
+  async getProductSpecReference(params: {
+    referenceId: string;
+  }): Promise<ProductSpecReferenceResponse> {
+    const { body } = await legacyFetch<ProductSpecReferenceResponse>(
+      `/api/product-spec-references/${encodeURIComponent(params.referenceId)}`,
       { method: "GET" },
     );
     return body;
