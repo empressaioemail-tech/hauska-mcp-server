@@ -1444,4 +1444,370 @@ export function registerTools(server: McpServer) {
       }
     },
   );
+
+  // -----------------------------------------------------------------
+  // Group 3 L3 — deliverable-letter tools (cortex_deliverable_letter_*).
+  //
+  // The comment-response letter as a classified atom: ordered sections
+  // (cover / intro / per-comment-response / signature), per-section
+  // provenance, draft/sent lifecycle. MCP-first contract built to match
+  // by cc-agent-C in Lane C.4. Gate: product='cortex'.
+  // -----------------------------------------------------------------
+
+  // L3 tool 1: cortex_deliverable_letter_create
+  server.tool(
+    "cortex_deliverable_letter_create",
+    "Cortex (design accelerator): create a deliverable letter (the comment-response letter) " +
+      "in draft status. Optionally pass initial sections — each carries a kind (cover / intro / " +
+      "per-comment-response / signature), a heading, and body content; section provenance starts " +
+      "empty (attach it later with cortex_deliverable_letter_attach_provenance). A letter needs " +
+      "a cover, an intro, and a signature section before it can be sent. Requires a " +
+      "Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement this letter belongs to. Required."),
+      title: z
+        .string()
+        .min(1)
+        .describe("Human letter title. Required."),
+      sections: z
+        .array(
+          z.object({
+            kind: z.enum([
+              "cover",
+              "intro",
+              "per-comment-response",
+              "signature",
+            ]),
+            heading: z.string().describe("Section heading. May be empty."),
+            content: z.string().describe("Section body text."),
+          }),
+        )
+        .optional()
+        .describe(
+          "Optional initial sections, in letter order. Omit to start with an empty letter.",
+        ),
+      recipient_actor_id: z
+        .string()
+        .optional()
+        .describe("Client actor receiving the letter (ADR-015)."),
+      actor_id: z
+        .string()
+        .optional()
+        .describe("Architect / staff member authoring the letter (ADR-015)."),
+      principal_actor_id: z
+        .string()
+        .optional()
+        .describe("Actor accountable for the engagement; may differ from actor_id."),
+    },
+    async ({
+      engagement_id,
+      title,
+      sections,
+      recipient_actor_id,
+      actor_id,
+      principal_actor_id,
+    }) => {
+      const gate = requireProduct("cortex_deliverable_letter_create", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.createDeliverableLetter({
+          engagementId: engagement_id,
+          title,
+          sections,
+          recipientActorId: recipient_actor_id,
+          actorId: actor_id,
+          principalActorId: principal_actor_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_deliverable_letter_create",
+          engagement_id,
+          letter_id: response.deliverableLetter.entityId,
+          section_count: response.deliverableLetter.sections.length,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.deliverableLetter),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_deliverable_letter_create", err),
+        );
+      }
+    },
+  );
+
+  // L3 tool 2: cortex_deliverable_letter_update_section
+  server.tool(
+    "cortex_deliverable_letter_update_section",
+    "Cortex (design accelerator): upsert a section of a deliverable letter by index. " +
+      "section_index within the current sections array replaces that section's kind / heading / " +
+      "content (its provenance is preserved); section_index equal to the current section count " +
+      "appends a new section. Use cortex_deliverable_letter_attach_provenance to link a section " +
+      "to its source atoms. Requires a Cortex-product API key.",
+    {
+      letter_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the deliverable letter. Required."),
+      section_index: z
+        .number()
+        .int()
+        .min(0)
+        .describe(
+          "Zero-based section index. Equal to the current section count appends a new section.",
+        ),
+      kind: z
+        .enum(["cover", "intro", "per-comment-response", "signature"])
+        .describe("Section kind. Required."),
+      heading: z.string().describe("Section heading. May be empty. Required."),
+      content: z.string().describe("Section body text. Required."),
+    },
+    async ({ letter_id, section_index, kind, heading, content }) => {
+      const gate = requireProduct(
+        "cortex_deliverable_letter_update_section",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.updateDeliverableLetterSection({
+          letterId: letter_id,
+          sectionIndex: section_index,
+          kind,
+          heading,
+          content,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_deliverable_letter_update_section",
+          letter_id,
+          section_index,
+          kind,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.deliverableLetter),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure(
+            "cortex_deliverable_letter_update_section",
+            err,
+          ),
+        );
+      }
+    },
+  );
+
+  // L3 tool 3: cortex_deliverable_letter_attach_provenance
+  server.tool(
+    "cortex_deliverable_letter_attach_provenance",
+    "Cortex (design accelerator): attach source-atom provenance to a deliverable-letter section. " +
+      "Pass any combination of response-task, sheet-content-extraction, finding, and " +
+      "adjudication-state atom entityIds — they are merged (deduped) into the section's existing " +
+      "provenance. This is how a per-comment-response section names exactly the finding plus " +
+      "response-task plus adjudication it answers. Requires a Cortex-product API key.",
+    {
+      letter_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the deliverable letter. Required."),
+      section_index: z
+        .number()
+        .int()
+        .min(0)
+        .describe("Zero-based index of the section to attach provenance to. Required."),
+      response_task_ids: z
+        .array(z.string())
+        .optional()
+        .describe("L1 response-task atom entityIds to cite."),
+      sheet_content_extraction_ids: z
+        .array(z.string())
+        .optional()
+        .describe("L2 sheet-content-extraction atom entityIds to cite."),
+      finding_ids: z
+        .array(z.string())
+        .optional()
+        .describe("Finding atom entityIds to cite."),
+      adjudication_state_ids: z
+        .array(z.string())
+        .optional()
+        .describe("Adjudication-state atom entityIds to cite."),
+    },
+    async ({
+      letter_id,
+      section_index,
+      response_task_ids,
+      sheet_content_extraction_ids,
+      finding_ids,
+      adjudication_state_ids,
+    }) => {
+      const gate = requireProduct(
+        "cortex_deliverable_letter_attach_provenance",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      if (
+        response_task_ids === undefined &&
+        sheet_content_extraction_ids === undefined &&
+        finding_ids === undefined &&
+        adjudication_state_ids === undefined
+      ) {
+        return errorContent(
+          "cortex_deliverable_letter_attach_provenance: pass at least one of response_task_ids, sheet_content_extraction_ids, finding_ids, adjudication_state_ids.",
+        );
+      }
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.attachDeliverableLetterProvenance({
+          letterId: letter_id,
+          sectionIndex: section_index,
+          responseTaskIds: response_task_ids,
+          sheetContentExtractionIds: sheet_content_extraction_ids,
+          findingIds: finding_ids,
+          adjudicationStateIds: adjudication_state_ids,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_deliverable_letter_attach_provenance",
+          letter_id,
+          section_index,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.deliverableLetter),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure(
+            "cortex_deliverable_letter_attach_provenance",
+            err,
+          ),
+        );
+      }
+    },
+  );
+
+  // L3 tool 4: cortex_deliverable_letter_completeness_check
+  server.tool(
+    "cortex_deliverable_letter_completeness_check",
+    "Cortex (design accelerator): check whether a deliverable letter is complete (sendable). " +
+      "Returns { complete, missing } — a letter is complete when it has a cover, an intro, and " +
+      "a signature section. Call this before cortex_deliverable_letter_send. Requires a " +
+      "Cortex-product API key.",
+    {
+      letter_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the deliverable letter. Required."),
+    },
+    async ({ letter_id }) => {
+      const gate = requireProduct(
+        "cortex_deliverable_letter_completeness_check",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.checkDeliverableLetterCompleteness({
+          letterId: letter_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_deliverable_letter_completeness_check",
+          letter_id,
+          complete: response.complete,
+          missing_count: response.missing.length,
+          tier,
+        });
+        // The completeness result is a derived check, not an atom — no
+        // provenance entry.
+        return envelopeContent(codexEnvelope(response, null, { tier }));
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure(
+            "cortex_deliverable_letter_completeness_check",
+            err,
+          ),
+        );
+      }
+    },
+  );
+
+  // L3 tool 5: cortex_deliverable_letter_send
+  server.tool(
+    "cortex_deliverable_letter_send",
+    "Cortex (design accelerator): send a deliverable letter — transitions it from draft to " +
+      "sent. The backend gates on completeness: an incomplete letter (missing a cover, intro, " +
+      "or signature section) is rejected and the response names the missing sections. Add the " +
+      "missing sections with cortex_deliverable_letter_update_section, then retry. Requires a " +
+      "Cortex-product API key.",
+    {
+      letter_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the deliverable letter to send. Required."),
+    },
+    async ({ letter_id }) => {
+      const gate = requireProduct("cortex_deliverable_letter_send", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.sendDeliverableLetter({
+          letterId: letter_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_deliverable_letter_send",
+          letter_id,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.deliverableLetter),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        // A 409 here is the completeness gate. Surface the missing
+        // sections clearly so the agent knows what to add before retry.
+        if (err instanceof LegacyHttpError && err.status === 409) {
+          let missing: unknown;
+          try {
+            missing = (JSON.parse(err.body) as { missing?: unknown }).missing;
+          } catch {
+            missing = undefined;
+          }
+          const missingNote = Array.isArray(missing)
+            ? ` Missing section(s): ${missing.join(", ")}.`
+            : "";
+          logger.warn("tool_legacy_http_error", {
+            tool: "cortex_deliverable_letter_send",
+            status: 409,
+            url: err.url,
+          });
+          return errorContent(
+            `cortex_deliverable_letter_send: the letter is not complete and cannot be sent.${missingNote} ` +
+              "Add the missing sections with cortex_deliverable_letter_update_section, then retry.",
+          );
+        }
+        return errorContent(
+          describeLegacyFailure("cortex_deliverable_letter_send", err),
+        );
+      }
+    },
+  );
 }

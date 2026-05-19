@@ -292,6 +292,82 @@ export interface ListAttachedDocumentsResponse {
 }
 
 // -----------------------------------------------------------------
+// L3 deliverable-letter wire types (Lane B Group 3).
+//
+// Hand-mirrored from `hauska-engine/packages/atoms` (Sync B(L3), engine
+// atoms package 0.3.0). MCP-first contract: the L3 endpoints do not
+// exist in legacy-design-tools yet; this client defines them and
+// cc-agent-C builds the matching routes in Lane C.4.
+// -----------------------------------------------------------------
+
+export type LetterSectionKind =
+  | "cover"
+  | "intro"
+  | "per-comment-response"
+  | "signature";
+
+/** Sections a letter must carry to be complete / sendable. */
+export const REQUIRED_LETTER_SECTION_KINDS: ReadonlyArray<LetterSectionKind> = [
+  "cover",
+  "intro",
+  "signature",
+];
+
+/** Per-section provenance — the atoms that fed a section's content. */
+export interface LetterSectionProvenance {
+  responseTaskIds: string[];
+  sheetContentExtractionIds: string[];
+  findingIds: string[];
+  adjudicationStateIds: string[];
+}
+
+/** One structured section of a deliverable letter. */
+export interface LetterSection {
+  kind: LetterSectionKind;
+  heading: string;
+  content: string;
+  provenance: LetterSectionProvenance;
+}
+
+export type DeliverableLetterStatus = "draft" | "sent";
+
+/** Full `deliverable-letter` atom instance returned by the L3 endpoints. */
+export interface DeliverableLetterAtom {
+  entityType: "deliverable-letter";
+  entityId: string;
+  jurisdictionTenant: string;
+  fetchedAt: string;
+  sourceAdapter: string;
+  sourceUrl: string;
+  contentHash: string;
+  engagementId: string;
+  title: string;
+  status: DeliverableLetterStatus;
+  recipientActorId: string | null;
+  sections: LetterSection[];
+  createdAt: string;
+  sentAt: string | null;
+  actorId: string | null;
+  principalActorId: string | null;
+  accessPolicy?: string;
+}
+
+export interface DeliverableLetterResponse {
+  deliverableLetter: DeliverableLetterAtom;
+}
+
+/**
+ * Result of the section-completeness check. `missing` lists the
+ * required section kinds (cover / intro / signature) absent from the
+ * letter. The legacy backend runs the engine's
+ * `deliverableLetterCompleteness()` helper.
+ */
+export interface DeliverableLetterCompletenessResponse {
+  complete: boolean;
+  missing: LetterSectionKind[];
+}
+
+// -----------------------------------------------------------------
 // Error types — matched to hauska-client.ts conventions so tool
 // handlers can use a uniform error shape across both backends.
 // -----------------------------------------------------------------
@@ -891,6 +967,154 @@ export const legacyClient = {
     const { body } = await legacyFetch<AttachedDocumentResponse>(
       `/api/attached-documents/${encodeURIComponent(params.attachedDocumentId)}`,
       { method: "GET" },
+    );
+    return body;
+  },
+
+  // -----------------------------------------------------------------
+  // L3 deliverable-letter methods (Group 3). MCP-first contract —
+  // built to match by cc-agent-C in Lane C.4. All bearer-auth.
+  // -----------------------------------------------------------------
+
+  /**
+   * POST /api/engagements/:engagementId/deliverable-letters
+   *
+   * Creates a deliverable letter in `draft` status. `sections` is
+   * optional — each entry carries kind / heading / content; provenance
+   * starts empty and is attached later via attachProvenance. The
+   * backend assigns `entityId`, stamps `createdAt`, and records the
+   * `deliverable-letter.drafted` event.
+   */
+  async createDeliverableLetter(params: {
+    engagementId: string;
+    title: string;
+    sections?: ReadonlyArray<{
+      kind: LetterSectionKind;
+      heading: string;
+      content: string;
+    }>;
+    recipientActorId?: string;
+    actorId?: string;
+    principalActorId?: string;
+  }): Promise<DeliverableLetterResponse> {
+    const jsonBody: Record<string, unknown> = { title: params.title };
+    if (params.sections !== undefined) jsonBody.sections = params.sections;
+    if (params.recipientActorId !== undefined) {
+      jsonBody.recipientActorId = params.recipientActorId;
+    }
+    if (params.actorId !== undefined) jsonBody.actorId = params.actorId;
+    if (params.principalActorId !== undefined) {
+      jsonBody.principalActorId = params.principalActorId;
+    }
+    const { body } = await legacyFetch<DeliverableLetterResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/deliverable-letters`,
+      { method: "POST", jsonBody },
+    );
+    return body;
+  },
+
+  /**
+   * POST /api/deliverable-letters/:letterId/sections
+   *
+   * Upserts a section by index into the ordered `sections` array.
+   * `sectionIndex` within the current array replaces that section's
+   * kind / heading / content (provenance preserved); `sectionIndex`
+   * equal to the current array length appends a new section (provenance
+   * starts empty); a larger index is a 400. Records the
+   * `deliverable-letter.section-revised` event.
+   */
+  async updateDeliverableLetterSection(params: {
+    letterId: string;
+    sectionIndex: number;
+    kind: LetterSectionKind;
+    heading: string;
+    content: string;
+  }): Promise<DeliverableLetterResponse> {
+    const { body } = await legacyFetch<DeliverableLetterResponse>(
+      `/api/deliverable-letters/${encodeURIComponent(params.letterId)}/sections`,
+      {
+        method: "POST",
+        jsonBody: {
+          sectionIndex: params.sectionIndex,
+          kind: params.kind,
+          heading: params.heading,
+          content: params.content,
+        },
+      },
+    );
+    return body;
+  },
+
+  /**
+   * POST /api/deliverable-letters/:letterId/sections/:sectionIndex/provenance
+   *
+   * Merges atom references into a section's provenance (response-task,
+   * sheet-content-extraction, finding, adjudication-state entityIds).
+   * Ids are added to the existing provenance arrays, deduped. Returns
+   * the updated letter atom.
+   */
+  async attachDeliverableLetterProvenance(params: {
+    letterId: string;
+    sectionIndex: number;
+    responseTaskIds?: ReadonlyArray<string>;
+    sheetContentExtractionIds?: ReadonlyArray<string>;
+    findingIds?: ReadonlyArray<string>;
+    adjudicationStateIds?: ReadonlyArray<string>;
+  }): Promise<DeliverableLetterResponse> {
+    const jsonBody: Record<string, unknown> = {};
+    if (params.responseTaskIds !== undefined) {
+      jsonBody.responseTaskIds = params.responseTaskIds;
+    }
+    if (params.sheetContentExtractionIds !== undefined) {
+      jsonBody.sheetContentExtractionIds = params.sheetContentExtractionIds;
+    }
+    if (params.findingIds !== undefined) {
+      jsonBody.findingIds = params.findingIds;
+    }
+    if (params.adjudicationStateIds !== undefined) {
+      jsonBody.adjudicationStateIds = params.adjudicationStateIds;
+    }
+    const { body } = await legacyFetch<DeliverableLetterResponse>(
+      `/api/deliverable-letters/${encodeURIComponent(params.letterId)}/sections/${params.sectionIndex}/provenance`,
+      { method: "POST", jsonBody },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/deliverable-letters/:letterId/completeness
+   *
+   * Runs the engine `deliverableLetterCompleteness()` helper against
+   * the letter's sections. Returns `{ complete, missing }` where
+   * `missing` lists the required section kinds (cover / intro /
+   * signature) that are absent.
+   */
+  async checkDeliverableLetterCompleteness(params: {
+    letterId: string;
+  }): Promise<DeliverableLetterCompletenessResponse> {
+    const { body } =
+      await legacyFetch<DeliverableLetterCompletenessResponse>(
+        `/api/deliverable-letters/${encodeURIComponent(params.letterId)}/completeness`,
+        { method: "GET" },
+      );
+    return body;
+  },
+
+  /**
+   * POST /api/deliverable-letters/:letterId/send
+   *
+   * Transitions a letter from `draft` to `sent`. The backend runs the
+   * completeness check first — an incomplete letter is rejected with a
+   * 409 `{ error: "deliverable_letter_incomplete", missing: [...] }`.
+   * On success the letter's `status` is `sent` and `sentAt` is stamped;
+   * the `deliverable-letter.sent` event is recorded.
+   */
+  async sendDeliverableLetter(params: {
+    letterId: string;
+  }): Promise<DeliverableLetterResponse> {
+    const { body } = await legacyFetch<DeliverableLetterResponse>(
+      `/api/deliverable-letters/${encodeURIComponent(params.letterId)}/send`,
+      { method: "POST", jsonBody: {} },
     );
     return body;
   },
