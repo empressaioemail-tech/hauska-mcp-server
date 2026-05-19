@@ -1810,4 +1810,324 @@ export function registerTools(server: McpServer) {
       }
     },
   );
+
+  // -----------------------------------------------------------------
+  // Group 3 L4 — detail-callout-spec tools (cortex_detail_callout_spec_*).
+  //
+  // A structured spec for a Revit detail callout the Revit Connector
+  // pushes via APS Design Automation. `spec` is a discriminated union
+  // (door-schedule / wall-section / wall-type / room-finish); the tool
+  // surface keeps detail_type as an explicit enum and forwards the
+  // type-specific fields as an opaque `spec` object — the legacy
+  // backend validates the assembled payload against the engine
+  // discriminated-union schema. This avoids nested-oneOf MCP-client
+  // friction (same pattern as cortex_snapshot_register). MCP-first
+  // contract built to match by cc-agent-C in Lane C.4. Gate:
+  // product='cortex'.
+  // -----------------------------------------------------------------
+
+  // L4 tool 1: cortex_detail_callout_spec_create
+  server.tool(
+    "cortex_detail_callout_spec_create",
+    "Cortex (design accelerator): create a detail-callout spec — a structured spec for a Revit " +
+      "detail the Revit Connector pushes into the model. detail_type selects the spec shape; " +
+      "pass the type-specific fields in spec:\n" +
+      "  - door-schedule: { rows: [{ doorMark, doorType, width, height, material, fireRating, hardwareSet }] }\n" +
+      "  - wall-section:  { sectionMark, cutLocation, assemblyLayers: [{ material, thickness, function }], baseDatum, topDatum }\n" +
+      "  - wall-type:     { typeMark, assemblyLayers: [{ material, thickness, function }], fireRating, stcRating }\n" +
+      "  - room-finish:   { roomName, roomNumber, floorFinish, baseFinish, wallFinish, ceilingFinish, ceilingHeight }\n" +
+      "The new spec starts in push state \"pending\". Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement this callout spec belongs to. Required."),
+      detail_type: z
+        .enum(["door-schedule", "wall-section", "wall-type", "room-finish"])
+        .describe("Detail-callout type. Selects the required spec shape. Required."),
+      spec: z
+        .record(z.unknown())
+        .describe(
+          "Type-specific spec fields for the chosen detail_type (see the field lists above). " +
+            "Required. The legacy backend validates this against the per-type schema.",
+        ),
+      finding_id: z
+        .string()
+        .optional()
+        .describe("Source finding atom entityId that drove this callout, if any."),
+      response_task_id: z
+        .string()
+        .optional()
+        .describe("Source response-task atom entityId, if task-driven."),
+      actor_id: z
+        .string()
+        .optional()
+        .describe("Architect / staff member authoring the spec (ADR-015)."),
+      principal_actor_id: z
+        .string()
+        .optional()
+        .describe("Actor accountable for the engagement; may differ from actor_id."),
+    },
+    async ({
+      engagement_id,
+      detail_type,
+      spec,
+      finding_id,
+      response_task_id,
+      actor_id,
+      principal_actor_id,
+    }) => {
+      const gate = requireProduct("cortex_detail_callout_spec_create", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.createDetailCalloutSpec({
+          engagementId: engagement_id,
+          detailType: detail_type,
+          spec,
+          findingId: finding_id,
+          responseTaskId: response_task_id,
+          actorId: actor_id,
+          principalActorId: principal_actor_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_detail_callout_spec_create",
+          engagement_id,
+          detail_type,
+          spec_id: response.detailCalloutSpec.entityId,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.detailCalloutSpec),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_detail_callout_spec_create", err),
+        );
+      }
+    },
+  );
+
+  // L4 tool 2: cortex_detail_callout_spec_update_push_state
+  server.tool(
+    "cortex_detail_callout_spec_update_push_state",
+    "Cortex (design accelerator): transition a detail-callout spec to a new push state. Legal " +
+      "transitions: pending → pushed; pushed → applied or rejected-by-user; rejected-by-user → " +
+      "pending (revise and re-push); applied is terminal. An illegal transition returns a 409 " +
+      "naming the legal next states. Requires a Cortex-product API key.",
+    {
+      spec_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the detail-callout spec. Required."),
+      push_state: z
+        .enum(["pending", "pushed", "applied", "rejected-by-user"])
+        .describe("Target push state. Required."),
+    },
+    async ({ spec_id, push_state }) => {
+      const gate = requireProduct(
+        "cortex_detail_callout_spec_update_push_state",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.updateDetailCalloutSpecPushState({
+          specId: spec_id,
+          pushState: push_state,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_detail_callout_spec_update_push_state",
+          spec_id,
+          push_state,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.detailCalloutSpec),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        // A 409 here is the illegal-transition gate. Surface the legal
+        // next states so the agent can pick a valid transition.
+        if (err instanceof LegacyHttpError && err.status === 409) {
+          let legal: unknown;
+          let from: unknown;
+          try {
+            const parsed = JSON.parse(err.body) as {
+              from?: unknown;
+              legalNextStates?: unknown;
+            };
+            from = parsed.from;
+            legal = parsed.legalNextStates;
+          } catch {
+            from = undefined;
+            legal = undefined;
+          }
+          const fromNote =
+            typeof from === "string" ? ` from state "${from}"` : "";
+          const legalNote = Array.isArray(legal)
+            ? ` Legal next state(s): ${legal.join(", ") || "none (terminal)"}.`
+            : "";
+          logger.warn("tool_legacy_http_error", {
+            tool: "cortex_detail_callout_spec_update_push_state",
+            status: 409,
+            url: err.url,
+          });
+          return errorContent(
+            `cortex_detail_callout_spec_update_push_state: illegal push-state transition${fromNote}.${legalNote}`,
+          );
+        }
+        return errorContent(
+          describeLegacyFailure(
+            "cortex_detail_callout_spec_update_push_state",
+            err,
+          ),
+        );
+      }
+    },
+  );
+
+  // L4 tool 3: cortex_detail_callout_spec_attach_aps_ref
+  server.tool(
+    "cortex_detail_callout_spec_attach_aps_ref",
+    "Cortex (design accelerator): attach the APS Design Automation work-item reference to a " +
+      "detail-callout spec. The Revit Connector writes this once a push fires so the spec can " +
+      "be correlated with its APS job. Requires a Cortex-product API key.",
+    {
+      spec_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the detail-callout spec. Required."),
+      aps_task_ref: z
+        .string()
+        .min(1)
+        .describe("Opaque APS Design Automation work-item reference. Required."),
+    },
+    async ({ spec_id, aps_task_ref }) => {
+      const gate = requireProduct(
+        "cortex_detail_callout_spec_attach_aps_ref",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.attachDetailCalloutSpecApsRef({
+          specId: spec_id,
+          apsTaskRef: aps_task_ref,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_detail_callout_spec_attach_aps_ref",
+          spec_id,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.detailCalloutSpec),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure(
+            "cortex_detail_callout_spec_attach_aps_ref",
+            err,
+          ),
+        );
+      }
+    },
+  );
+
+  // L4 tool 4: cortex_detail_callout_spec_list
+  server.tool(
+    "cortex_detail_callout_spec_list",
+    "Cortex (design accelerator): list the detail-callout specs for an engagement, optionally " +
+      "filtered to a single push state. Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement. Required."),
+      push_state: z
+        .enum(["pending", "pushed", "applied", "rejected-by-user"])
+        .optional()
+        .describe("Optional push-state filter. Omit to list specs in every state."),
+    },
+    async ({ engagement_id, push_state }) => {
+      const gate = requireProduct("cortex_detail_callout_spec_list", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.listDetailCalloutSpecs({
+          engagementId: engagement_id,
+          pushState: push_state,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_detail_callout_spec_list",
+          engagement_id,
+          push_state,
+          count: response.detailCalloutSpecs.length,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            response.detailCalloutSpecs.map(lSurfaceProvenance),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_detail_callout_spec_list", err),
+        );
+      }
+    },
+  );
+
+  // L4 tool 5: cortex_detail_callout_spec_get
+  server.tool(
+    "cortex_detail_callout_spec_get",
+    "Cortex (design accelerator): fetch a single detail-callout-spec atom by id, including its " +
+      "discriminated spec payload, push state, and APS work-item ref. Requires a Cortex-product " +
+      "API key.",
+    {
+      spec_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the detail-callout spec. Required."),
+    },
+    async ({ spec_id }) => {
+      const gate = requireProduct("cortex_detail_callout_spec_get", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.getDetailCalloutSpec({
+          specId: spec_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_detail_callout_spec_get",
+          spec_id,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.detailCalloutSpec),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_detail_callout_spec_get", err),
+        );
+      }
+    },
+  );
 }

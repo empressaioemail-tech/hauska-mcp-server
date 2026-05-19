@@ -368,6 +368,66 @@ export interface DeliverableLetterCompletenessResponse {
 }
 
 // -----------------------------------------------------------------
+// L4 detail-callout-spec wire types (Lane B Group 3).
+//
+// Hand-mirrored from `hauska-engine/packages/atoms` (Sync B(L4), engine
+// atoms package 0.4.0). MCP-first contract: the L4 endpoints do not
+// exist in legacy-design-tools yet; this client defines them and
+// cc-agent-C builds the matching routes in Lane C.4.
+//
+// `spec` is a discriminated union keyed on `detailType`. The MCP tool
+// surface keeps `detail_type` as an explicit enum param and forwards
+// the type-specific fields as an opaque `spec` object; the legacy
+// backend validates the assembled payload against the engine's
+// `DETAIL_CALLOUT_SPEC_PAYLOAD_SCHEMA` discriminated union. This avoids
+// nested-`oneOf` JSON-Schema friction in MCP clients (the same opaque-
+// payload pattern as `cortex_snapshot_register`).
+// -----------------------------------------------------------------
+
+export type DetailCalloutType =
+  | "door-schedule"
+  | "wall-section"
+  | "wall-type"
+  | "room-finish";
+
+export type DetailCalloutPushState =
+  | "pending"
+  | "pushed"
+  | "applied"
+  | "rejected-by-user";
+
+/** Full `detail-callout-spec` atom instance returned by the L4 endpoints. */
+export interface DetailCalloutSpecAtom {
+  entityType: "detail-callout-spec";
+  entityId: string;
+  jurisdictionTenant: string;
+  fetchedAt: string;
+  sourceAdapter: string;
+  sourceUrl: string;
+  contentHash: string;
+  engagementId: string;
+  /** Discriminated spec payload — carries `detailType` plus type-specific fields. */
+  spec: Record<string, unknown>;
+  pushState: DetailCalloutPushState;
+  apsTaskRef: string | null;
+  findingId: string | null;
+  responseTaskId: string | null;
+  createdAt: string;
+  pushedAt: string | null;
+  actorId: string | null;
+  principalActorId: string | null;
+  accessPolicy?: string;
+}
+
+export interface DetailCalloutSpecResponse {
+  detailCalloutSpec: DetailCalloutSpecAtom;
+}
+
+export interface ListDetailCalloutSpecsResponse {
+  detailCalloutSpecs: DetailCalloutSpecAtom[];
+}
+
+// -----------------------------------------------------------------
 // Error types — matched to hauska-client.ts conventions so tool
 // handlers can use a uniform error shape across both backends.
 // -----------------------------------------------------------------
@@ -1115,6 +1175,127 @@ export const legacyClient = {
     const { body } = await legacyFetch<DeliverableLetterResponse>(
       `/api/deliverable-letters/${encodeURIComponent(params.letterId)}/send`,
       { method: "POST", jsonBody: {} },
+    );
+    return body;
+  },
+
+  // -----------------------------------------------------------------
+  // L4 detail-callout-spec methods (Group 3). MCP-first contract —
+  // built to match by cc-agent-C in Lane C.4. All bearer-auth.
+  // -----------------------------------------------------------------
+
+  /**
+   * POST /api/engagements/:engagementId/detail-callout-specs
+   *
+   * Creates a detail-callout spec. The `spec` field carries the
+   * type-specific payload; the legacy backend assembles the atom's
+   * discriminated `spec` as `{ detailType, ...spec }` and validates it
+   * against the engine `DETAIL_CALLOUT_SPEC_PAYLOAD_SCHEMA`. The
+   * backend assigns `entityId`, sets `pushState` to `"pending"`, leaves
+   * `apsTaskRef` null, stamps `createdAt`, and records the
+   * `detail-callout-spec.created` event.
+   */
+  async createDetailCalloutSpec(params: {
+    engagementId: string;
+    detailType: DetailCalloutType;
+    spec: Record<string, unknown>;
+    findingId?: string;
+    responseTaskId?: string;
+    actorId?: string;
+    principalActorId?: string;
+  }): Promise<DetailCalloutSpecResponse> {
+    const jsonBody: Record<string, unknown> = {
+      // The wire `spec` is the discriminated payload: detailType plus
+      // the type-specific fields.
+      spec: { detailType: params.detailType, ...params.spec },
+    };
+    if (params.findingId !== undefined) jsonBody.findingId = params.findingId;
+    if (params.responseTaskId !== undefined) {
+      jsonBody.responseTaskId = params.responseTaskId;
+    }
+    if (params.actorId !== undefined) jsonBody.actorId = params.actorId;
+    if (params.principalActorId !== undefined) {
+      jsonBody.principalActorId = params.principalActorId;
+    }
+    const { body } = await legacyFetch<DetailCalloutSpecResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/detail-callout-specs`,
+      { method: "POST", jsonBody },
+    );
+    return body;
+  },
+
+  /**
+   * POST /api/detail-callout-specs/:specId/push-state
+   *
+   * Transitions a detail-callout spec to a new push state. The legacy
+   * backend validates the transition via the engine
+   * `isLegalPushTransition` helper — an illegal transition is rejected
+   * with a 409 `{ error: "illegal_push_transition", from, to,
+   * legalNextStates }`. On success the matching event
+   * (`detail-callout-spec.pushed` / `.applied` / `.rejected`) is
+   * recorded; entering `"pushed"` stamps `pushedAt`.
+   */
+  async updateDetailCalloutSpecPushState(params: {
+    specId: string;
+    pushState: DetailCalloutPushState;
+  }): Promise<DetailCalloutSpecResponse> {
+    const { body } = await legacyFetch<DetailCalloutSpecResponse>(
+      `/api/detail-callout-specs/${encodeURIComponent(params.specId)}/push-state`,
+      { method: "POST", jsonBody: { pushState: params.pushState } },
+    );
+    return body;
+  },
+
+  /**
+   * POST /api/detail-callout-specs/:specId/aps-ref
+   *
+   * Writes the opaque APS Design Automation work-item ref onto the
+   * spec — populated by the Revit Connector once a push fires.
+   */
+  async attachDetailCalloutSpecApsRef(params: {
+    specId: string;
+    apsTaskRef: string;
+  }): Promise<DetailCalloutSpecResponse> {
+    const { body } = await legacyFetch<DetailCalloutSpecResponse>(
+      `/api/detail-callout-specs/${encodeURIComponent(params.specId)}/aps-ref`,
+      { method: "POST", jsonBody: { apsTaskRef: params.apsTaskRef } },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/engagements/:engagementId/detail-callout-specs
+   *
+   * Lists the detail-callout specs for an engagement, optionally
+   * filtered to a single push state.
+   */
+  async listDetailCalloutSpecs(params: {
+    engagementId: string;
+    pushState?: DetailCalloutPushState;
+  }): Promise<ListDetailCalloutSpecsResponse> {
+    const qs = new URLSearchParams();
+    if (params.pushState !== undefined) qs.set("pushState", params.pushState);
+    const query = qs.toString();
+    const { body } = await legacyFetch<ListDetailCalloutSpecsResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/detail-callout-specs${
+        query ? `?${query}` : ""
+      }`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/detail-callout-specs/:specId
+   *
+   * Fetches a single detail-callout-spec atom.
+   */
+  async getDetailCalloutSpec(params: {
+    specId: string;
+  }): Promise<DetailCalloutSpecResponse> {
+    const { body } = await legacyFetch<DetailCalloutSpecResponse>(
+      `/api/detail-callout-specs/${encodeURIComponent(params.specId)}`,
+      { method: "GET" },
     );
     return body;
   },

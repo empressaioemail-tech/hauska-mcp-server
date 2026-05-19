@@ -203,6 +203,26 @@ returns a 409; the tool surfaces the named missing sections so the
 agent can add them via `cortex_deliverable_letter_update_section` and
 retry.
 
+**L4 — detail-callout-spec:**
+
+| Tool | Method | Legacy endpoint (MCP-first) | Auth |
+|---|---|---|---|
+| `cortex_detail_callout_spec_create` | POST | `/api/engagements/:id/detail-callout-specs` | bearer |
+| `cortex_detail_callout_spec_update_push_state` | POST | `/api/detail-callout-specs/:id/push-state` | bearer |
+| `cortex_detail_callout_spec_attach_aps_ref` | POST | `/api/detail-callout-specs/:id/aps-ref` | bearer |
+| `cortex_detail_callout_spec_list` | GET | `/api/engagements/:id/detail-callout-specs` | bearer |
+| `cortex_detail_callout_spec_get` | GET | `/api/detail-callout-specs/:id` | bearer |
+
+The L4 spec payload is a discriminated union (door-schedule /
+wall-section / wall-type / room-finish). `create` keeps `detail_type`
+as an explicit enum and forwards the type-specific fields as an opaque
+`spec` object passthrough — the legacy backend validates the assembled
+payload against the engine discriminated-union schema. This avoids
+nested-`oneOf` JSON-Schema friction in MCP clients (same pattern as
+`cortex_snapshot_register`). `update_push_state` is gated server-side
+via `isLegalPushTransition`; an illegal transition returns a 409 and
+the tool surfaces the legal next states.
+
 L-surface atoms carry the full BaseAtomInstance contract, so their
 provenance uses real `did:hauska:<type>:<id>` DIDs via
 `lSurfaceProvenance` — unlike the Groups 1+2 tools, which wrap legacy

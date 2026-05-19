@@ -20,6 +20,26 @@ breaking changes are common until the 1.0.0 release.
   avoids transferring hidden jurisdictions over the wire.
 
 ### Added
+- **Group 3 L4 — detail-callout-spec tools (`cortex_detail_callout_spec_*`).**
+  Five MCP tools for the L4 detail-callout-spec surface (Revit detail
+  callouts the Revit Connector pushes via APS Design Automation):
+  - `cortex_detail_callout_spec_create` → `POST /api/engagements/:id/detail-callout-specs`
+  - `cortex_detail_callout_spec_update_push_state` → `POST /api/detail-callout-specs/:id/push-state`
+  - `cortex_detail_callout_spec_attach_aps_ref` → `POST /api/detail-callout-specs/:id/aps-ref`
+  - `cortex_detail_callout_spec_list` → `GET /api/engagements/:id/detail-callout-specs`
+  - `cortex_detail_callout_spec_get` → `GET /api/detail-callout-specs/:id`
+
+  Design call: the spec payload is a discriminated union (door-schedule
+  / wall-section / wall-type / room-finish). The `create` tool keeps
+  `detail_type` as an explicit enum and forwards the type-specific
+  fields as an opaque `spec` object — the legacy backend validates the
+  assembled payload against the engine discriminated-union schema. This
+  avoids nested-`oneOf` JSON-Schema friction in MCP clients (same
+  opaque-payload pattern as `cortex_snapshot_register`). `update_push_state`
+  is gated server-side via `isLegalPushTransition`; an illegal
+  transition returns a 409 and the tool surfaces the legal next states.
+  Same MCP-first contract as L1-L3. Gate: `product='cortex'`. 12 new
+  tests in `tests/cortex-detail-callout-spec.test.ts`.
 - **Group 3 L3 — deliverable-letter tools (`cortex_deliverable_letter_*`).**
   Five MCP tools for the L3 deliverable-letter surface (the
   comment-response letter as a classified atom):
