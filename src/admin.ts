@@ -18,9 +18,12 @@ import {
 } from "./db.js";
 import { generateKey } from "./keys.js";
 import { logger } from "./logger.js";
+import { PRODUCTS, type Product } from "./products.js";
 import { TIERS, type Tier } from "./tiers.js";
 
 const TIER_ENUM = z.enum(TIERS as readonly [Tier, ...Tier[]]);
+
+const PRODUCT_ENUM = z.enum(PRODUCTS as readonly [Product, ...Product[]]);
 
 const STATUS_ENUM = z.enum([
   "active",
@@ -31,6 +34,9 @@ const STATUS_ENUM = z.enum([
 
 const CreateBody = z.object({
   tier: TIER_ENUM,
+  // Default 'public' so existing operator scripts that mint substrate
+  // keys without specifying product keep working unchanged.
+  product: PRODUCT_ENUM.default("public"),
   owner_email: z.string().email(),
   owner_name: z.string().min(1).max(200).optional(),
   notes: z.string().max(2000).optional(),
@@ -39,12 +45,17 @@ const CreateBody = z.object({
 const PatchBody = z
   .object({
     tier: TIER_ENUM.optional(),
+    product: PRODUCT_ENUM.optional(),
     status: STATUS_ENUM.optional(),
     notes: z.string().max(2000).nullable().optional(),
   })
   .refine(
-    (v) => v.tier !== undefined || v.status !== undefined || v.notes !== undefined,
-    "At least one of tier, status, notes must be provided.",
+    (v) =>
+      v.tier !== undefined ||
+      v.product !== undefined ||
+      v.status !== undefined ||
+      v.notes !== undefined,
+    "At least one of tier, product, status, notes must be provided.",
   );
 
 export function buildAdminRouter(): Router {
@@ -62,6 +73,7 @@ export function buildAdminRouter(): Router {
       const row = await insertKey({
         key_hash: generated.hash,
         tier: parsed.data.tier,
+        product: parsed.data.product,
         owner_email: parsed.data.owner_email,
         owner_name: parsed.data.owner_name ?? null,
         notes: parsed.data.notes ?? null,
@@ -69,6 +81,7 @@ export function buildAdminRouter(): Router {
       logger.info("admin_key_minted", {
         key_id: row.key_id,
         tier: row.tier,
+        product: row.product,
         owner_email: row.owner_email,
       });
       // raw is returned ONCE here. Never logged, never stored after this.

@@ -136,6 +136,43 @@ The Inspector is browser-based; it opens a local URL printed to stdout.
   with forward slashes, which never matches on Windows. Patched
   2026-05-19 to normalize backslashes before the check.
 
+## Codex tool surfaces (Sprint 2 Group 1)
+
+Four MCP tools wrap the legacy-design-tools api-server under the
+`codex_*` namespace. Per doc_repo
+`_dispatches/2026-05-19_cc-agent-M_mcp_tool_surfaces.md`.
+
+| Tool | Method | Legacy endpoint |
+|---|---|---|
+| `codex_finding_generation` | POST | `/api/submissions/:submissionId/findings/generate` |
+| `codex_override_write` | POST | `/api/findings/:findingId/override` |
+| `codex_briefing_fetch` | GET | `/api/engagements/:id/briefing` |
+| `codex_snapshot_ingest` | POST | `/api/engagements/:id/submissions` |
+
+### Product dimension and auth
+
+`api_keys` carries a `product` column (`public` / `codex` / `cortex`),
+orthogonal to `tier`. `codex_*` tools require a key with
+`product='codex'`. The substrate catalog tools (`search_atoms` etc.)
+remain on `product='public'`. Migration 002 adds the column;
+existing rows backfill to `public`.
+
+In dev mode (`HAUSKA_DEV_MODE=true`), set `X-Hauska-Dev-Product: codex`
+on the MCP request to exercise `codex_*` tools without standing up the
+api_keys table.
+
+### Cross-repo dependency on legacy-design-tools
+
+The legacy backend currently uses cookie-session auth via
+`requireReviewerAudience`. `legacy-client.ts` sends
+`Authorization: Bearer ${LEGACY_BACKEND_API_KEY}`. **The legacy backend
+needs a service-token middleware before these tools work end-to-end.**
+Flagged as a Lane C coordination item for cc-agent-C.
+
+Local end-to-end testing today requires the legacy backend's audience
+guard to be bypassed or stubbed. Unit-test coverage (23 new tests) is
+mocked-fetch only; integration coverage waits on Lane C wiring.
+
 ## Pending follow-ups for cc-agent-M
 
 - Stream 2C structured logger upgrade (Phase 0 shape:
@@ -144,3 +181,10 @@ The Inspector is browser-based; it opens a local URL printed to stdout.
 - Stream 2A nice-to-haves: response payload size cap, hauska-engine
   pagination support if list endpoints grow.
 - Stripe scaffold + self-serve signup (Stream 2B Phase 8).
+- **Cortex tool surfaces (Sprint 2 Group 2).** Four more tools mirroring
+  the Codex pattern: `cortex_ifc_ingest`, `cortex_bim_model_query`,
+  `cortex_snapshot_register`, `cortex_briefing_emit`.
+- **L1-L6 surface tools (Sprint 2 Group 3).** Gates per Sync B from
+  Lane A.2 atom-shape locks (cc-agent-E).
+- **Visibility filter on `list_jurisdictions` (Sprint 2 Group 5).**
+  Gates on Lane Foundation v1.1.0 publish (cc-agent-AC).

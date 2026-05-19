@@ -6,6 +6,46 @@ breaking changes are common until the 1.0.0 release.
 ## [Unreleased]
 
 ### Added
+- **Codex tool surfaces (Lane B Group 1).** Four MCP tools wrapping
+  legacy-design-tools Codex (plan-review) endpoints under the
+  underscore-namespaced `codex_*` prefix:
+  - `codex_finding_generation` → POST `/api/submissions/:id/findings/generate`.
+    Normalizes the legacy 409 finding-already-in-flight response into a
+    canonical envelope with `alreadyInFlight=true`.
+  - `codex_override_write` → POST `/api/findings/:id/override`. Carry-over
+    flag from legacy PR #20 close-out: the 409 `finding_already_overridden`
+    envelope does not carry `resolvedBy`/`resolvedAt`; tool callers
+    should not depend on those fields.
+  - `codex_briefing_fetch` → GET `/api/engagements/:id/briefing`.
+  - `codex_snapshot_ingest` → POST `/api/engagements/:id/submissions`.
+    The legacy backend auto-triggers classification + finding generation
+    downstream from the inserted submission row.
+- **Product dimension on `api_keys`.** New `product` column (`public` /
+  `codex` / `cortex`) orthogonal to `tier`. Existing rows backfill to
+  `public`. Admin endpoints (`POST /admin/keys`, `PATCH /admin/keys/:id`)
+  accept the new field; `product` defaults to `public` when omitted.
+  Migration: `migrations/002_api_keys_product.sql`.
+- **Product gate on tools.** `requireProduct(tool, expected)` in
+  `tools.ts` rejects callers whose AsyncLocalStorage-bound product does
+  not match the tool's expected product. `codex_*` tools require
+  `product='codex'`.
+- **`src/legacy-client.ts`.** Native-fetch HTTP client against the
+  legacy-design-tools api-server with typed errors
+  (`LegacyHttpError`, `LegacyUnreachableError`). Bearer-token auth via
+  `LEGACY_BACKEND_API_KEY`; base URL via `LEGACY_BACKEND_URL`.
+- **Codex envelope builders.** `codexEnvelope` + `codexProvenance` in
+  `src/atom-shape.ts` produce a uniform `{data, atoms, meta}` shape
+  for legacy-backed responses. Provenance carries a `legacy:<kind>:<id>`
+  synthetic identifier until the legacy registry surfaces via the
+  engine retrieval API.
+- **Dev-mode product header.** `X-Hauska-Dev-Product` lets local
+  developers exercise `codex_*` tools in dev mode without standing up
+  the `api_keys` table. Production paths ignore the header.
+- **23 new tests.** 14 in `tests/legacy-client.test.ts` (wire
+  conformance, 409 normalization, bearer-token header, env-var
+  override). 9 in `tests/codex-tools.test.ts` (product gate semantics
+  under various AsyncLocalStorage bindings, envelope shape, attribution
+  rules).
 - `@hauska/atom-contract@^1.0.0` pin (Sync 1 fold-in).
 - `hauska-client.ts` rewritten as a real HTTP client against the
   `hauska-engine` retrieval API per Sync 3 contract. Five endpoints

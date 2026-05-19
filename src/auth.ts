@@ -17,6 +17,7 @@ import type { NextFunction, Request, Response } from "express";
 import { findKeyByHash, touchLastUsed } from "./db.js";
 import { constantTimeEquals, parseKey } from "./keys.js";
 import { logger } from "./logger.js";
+import type { Product } from "./products.js";
 import {
   checkRateLimit,
   type RateLimitDecision,
@@ -26,6 +27,10 @@ import { freeIpLimits, limitsForTier, type Tier } from "./tiers.js";
 
 export interface AuthContext {
   tier: Tier | "free_anonymous";
+  // Product the caller is authorized for. Free-anonymous callers are
+  // implicitly 'public'; codex / cortex products are reachable only via
+  // a key bound to that product per migration 002.
+  product: Product;
   // Present only for authenticated requests.
   key_id?: string;
   key_hash?: string;
@@ -142,6 +147,7 @@ export function buildAuthMiddleware(store: RateLimitStore) {
 
       req.hauska = {
         tier: row.tier,
+        product: row.product,
         key_id: row.key_id,
         key_hash: row.key_hash,
         rate_limit_id: identifier,
@@ -180,6 +186,7 @@ export function buildAuthMiddleware(store: RateLimitStore) {
     }
     req.hauska = {
       tier: "free_anonymous",
+      product: "public",
       rate_limit_id: identifier,
       remaining_rpm: decision.remaining_rpm,
       remaining_daily: decision.remaining_daily,

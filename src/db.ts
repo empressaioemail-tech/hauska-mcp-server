@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 
 import pg from "pg";
 
+import { isProduct, type Product } from "./products.js";
 import { isTier, type Tier } from "./tiers.js";
 
 const { Pool } = pg;
@@ -18,6 +19,7 @@ export interface ApiKeyRow {
   key_id: string;
   key_hash: string;
   tier: Tier;
+  product: Product;
   owner_email: string;
   owner_name: string | null;
   created_at: Date;
@@ -30,6 +32,7 @@ export interface ApiKeyRow {
 export interface ApiKeyPublic {
   key_id: string;
   tier: Tier;
+  product: Product;
   owner_email: string;
   owner_name: string | null;
   created_at: string;
@@ -66,6 +69,7 @@ function rowToPublic(row: ApiKeyRow): ApiKeyPublic {
   return {
     key_id: row.key_id,
     tier: row.tier,
+    product: row.product,
     owner_email: row.owner_email,
     owner_name: row.owner_name,
     created_at: row.created_at.toISOString(),
@@ -80,10 +84,18 @@ function castRow(raw: Record<string, unknown>): ApiKeyRow {
   if (typeof tier !== "string" || !isTier(tier)) {
     throw new Error(`api_keys row has invalid tier: ${String(tier)}`);
   }
+  // Pre-migration 002 rows do not carry product; default to 'public' so
+  // the column-add migration can roll out without coordinated app deploy.
+  const productRaw = raw.product;
+  const product: Product =
+    typeof productRaw === "string" && isProduct(productRaw)
+      ? productRaw
+      : "public";
   return {
     key_id: raw.key_id as string,
     key_hash: raw.key_hash as string,
     tier,
+    product,
     owner_email: raw.owner_email as string,
     owner_name: (raw.owner_name as string | null) ?? null,
     created_at: raw.created_at as Date,
@@ -93,22 +105,27 @@ function castRow(raw: Record<string, unknown>): ApiKeyRow {
   };
 }
 
+const SELECT_COLS =
+  "key_id, key_hash, tier, product, owner_email, owner_name, created_at, last_used_at, status, notes";
+
 export async function insertKey(params: {
   key_hash: string;
   tier: Tier;
+  product: Product;
   owner_email: string;
   owner_name?: string | null;
   notes?: string | null;
 }): Promise<ApiKeyPublic> {
   const keyId = randomUUID();
   const result = await getPool().query<Record<string, unknown>>(
-    `INSERT INTO api_keys (key_id, key_hash, tier, owner_email, owner_name, notes)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING key_id, key_hash, tier, owner_email, owner_name, created_at, last_used_at, status, notes`,
+    `INSERT INTO api_keys (key_id, key_hash, tier, product, owner_email, owner_name, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING ${SELECT_COLS}`,
     [
       keyId,
       params.key_hash,
       params.tier,
+      params.product,
       params.owner_email,
       params.owner_name ?? null,
       params.notes ?? null,
@@ -124,7 +141,7 @@ export async function findKeyByHash(
   hash: string,
 ): Promise<ApiKeyRow | null> {
   const result = await getPool().query<Record<string, unknown>>(
-    `SELECT key_id, key_hash, tier, owner_email, owner_name, created_at, last_used_at, status, notes
+    `SELECT ${SELECT_COLS}
      FROM api_keys
      WHERE key_hash = $1`,
     [hash],
@@ -136,7 +153,7 @@ export async function findKeyByHash(
 
 export async function listKeys(): Promise<ApiKeyPublic[]> {
   const result = await getPool().query<Record<string, unknown>>(
-    `SELECT key_id, key_hash, tier, owner_email, owner_name, created_at, last_used_at, status, notes
+    `SELECT ${SELECT_COLS}
      FROM api_keys
      ORDER BY created_at DESC`,
   );
@@ -145,7 +162,12 @@ export async function listKeys(): Promise<ApiKeyPublic[]> {
 
 export async function updateKey(
   keyId: string,
-  patch: { tier?: Tier; status?: KeyStatus; notes?: string | null },
+  patch: {
+    tier?: Tier;
+    product?: Product;
+    status?: KeyStatus;
+    notes?: string | null;
+  },
 ): Promise<ApiKeyPublic | null> {
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -153,6 +175,10 @@ export async function updateKey(
   if (patch.tier !== undefined) {
     sets.push(`tier = $${i++}`);
     values.push(patch.tier);
+  }
+  if (patch.product !== undefined) {
+    sets.push(`product = $${i++}`);
+    values.push(patch.product);
   }
   if (patch.status !== undefined) {
     sets.push(`status = $${i++}`);
@@ -165,7 +191,7 @@ export async function updateKey(
   if (sets.length === 0) {
     // No-op patch: just return the current row.
     const result = await getPool().query<Record<string, unknown>>(
-      `SELECT key_id, key_hash, tier, owner_email, owner_name, created_at, last_used_at, status, notes
+      `SELECT ${SELECT_COLS}
        FROM api_keys
        WHERE key_id = $1`,
       [keyId],
@@ -178,7 +204,7 @@ export async function updateKey(
     `UPDATE api_keys
      SET ${sets.join(", ")}
      WHERE key_id = $${i}
-     RETURNING key_id, key_hash, tier, owner_email, owner_name, created_at, last_used_at, status, notes`,
+     RETURNING ${SELECT_COLS}`,
     values,
   );
   const row = result.rows[0];

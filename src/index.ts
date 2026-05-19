@@ -12,6 +12,7 @@ import type { NextFunction, Request, Response } from "express";
 import { adminAuthMiddleware, buildAuthMiddleware } from "./auth.js";
 import { buildAdminRouter } from "./admin.js";
 import { logger } from "./logger.js";
+import { isProduct, type Product } from "./products.js";
 import {
   buildUpstashStore,
   MemoryRateLimitStore,
@@ -92,9 +93,19 @@ async function main() {
       note: "HAUSKA_DEV_MODE=true. Auth + rate limit disabled; every request treated as free_anonymous. Do NOT use in production.",
     });
     rateLimitStore = new MemoryRateLimitStore();
+    // Dev mode honors an optional X-Hauska-Dev-Product header so a
+    // local developer can exercise codex_* / cortex_* tools without
+    // standing up the api_keys table. Missing / unknown header defaults
+    // to 'public' which matches production-anonymous behavior.
     authMiddleware = (req, _res, next) => {
+      const headerRaw = (req.headers["x-hauska-dev-product"] as
+        | string
+        | undefined)?.trim();
+      const product: Product =
+        headerRaw && isProduct(headerRaw) ? headerRaw : "public";
       req.hauska = {
         tier: "free_anonymous",
+        product,
         rate_limit_id: `dev:${req.ip ?? "unknown"}`,
         remaining_rpm: -1,
         remaining_daily: -1,
@@ -118,6 +129,7 @@ async function main() {
   app.post("/mcp", authMiddleware, async (req, res) => {
     const ctx = req.hauska ?? {
       tier: "free_anonymous" as const,
+      product: "public" as const,
       rate_limit_id: `ip:${req.ip ?? "unknown"}`,
       remaining_rpm: -1,
       remaining_daily: -1,
@@ -127,6 +139,7 @@ async function main() {
       id: req.body?.id,
       ip: req.ip,
       tier: ctx.tier,
+      product: ctx.product,
       key_id: ctx.key_id,
     });
     const { transport, close } = await buildPerRequestMcp();
