@@ -187,3 +187,83 @@ test("lSurfaceProvenance builds a real DID for a deliverable-letter-render atom"
   assert.equal(entry.entityType, "deliverable-letter-render");
   assert.equal(entry.contentHash, "hash-dlr");
 });
+
+// -----------------------------------------------------------------
+// downloadDeliverableLetterRender — GET .../renders/:id/file (Amendment 8)
+//
+// The byte-serve endpoint returns the file itself, not a JSON envelope.
+// These tests use a binary-body fetch mock instead of the JSON mock in
+// beforeEach (afterEach still restores the real fetch).
+// -----------------------------------------------------------------
+
+const DOCX_MIME =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+test("downloadDeliverableLetterRender GETs the byte-serve endpoint and lifts headers", async () => {
+  const fileBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return new Response(fileBytes, {
+      status: 200,
+      headers: {
+        "content-type": DOCX_MIME,
+        "content-disposition": 'attachment; filename="dl-1-2026-05-20.docx"',
+      },
+    });
+  }) as typeof fetch;
+
+  const res = await legacyClient.downloadDeliverableLetterRender({
+    renderId: "dlr-1",
+  });
+  const url = new URL(calls[0]!.url);
+  assert.equal(url.pathname, "/api/deliverable-letter-renders/dlr-1/file");
+  assert.equal(calls[0]!.init?.method, "GET");
+  assert.equal(res.contentType, DOCX_MIME);
+  assert.equal(res.filename, "dl-1-2026-05-20.docx");
+  assert.deepEqual(Array.from(res.bytes), [0x50, 0x4b, 0x03, 0x04]);
+});
+
+test("downloadDeliverableLetterRender falls back to a default filename", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: { "content-type": "application/pdf" },
+    });
+  }) as typeof fetch;
+
+  const res = await legacyClient.downloadDeliverableLetterRender({
+    renderId: "dlr-9",
+  });
+  assert.equal(res.filename, "dlr-9.pdf");
+  assert.equal(res.contentType, "application/pdf");
+});
+
+test("downloadDeliverableLetterRender sends the bearer token", async () => {
+  process.env.LEGACY_BACKEND_API_KEY = "svc-token";
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return new Response(new Uint8Array([0]), {
+      status: 200,
+      headers: { "content-type": "application/pdf" },
+    });
+  }) as typeof fetch;
+  await legacyClient.downloadDeliverableLetterRender({ renderId: "dlr-1" });
+  const headers = calls[0]!.init?.headers as Record<string, string> | undefined;
+  assert.equal(headers?.authorization, "Bearer svc-token");
+});
+
+test("downloadDeliverableLetterRender rethrows a 404 as LegacyHttpError", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return new Response(
+      JSON.stringify({ error: "deliverable_letter_not_found" }),
+      { status: 404, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  await assert.rejects(
+    () =>
+      legacyClient.downloadDeliverableLetterRender({ renderId: "dlr-missing" }),
+    (err: unknown) => err instanceof LegacyHttpError && err.status === 404,
+  );
+});

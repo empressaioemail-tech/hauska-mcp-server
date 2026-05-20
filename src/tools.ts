@@ -2510,4 +2510,171 @@ export function registerTools(server: McpServer) {
       }
     },
   );
+
+  // -----------------------------------------------------------------
+  // Amendment 8 follow-on — L3/L6 read + download tools.
+  //
+  // cc-agent-C's Lane C.4 added three read endpoints beyond the original
+  // write-path-only L3/L6 contract: a letter list, a single-letter
+  // fetch, and a render byte-serve download. The additions were ratified
+  // in-scope by Sprint Amendment 8 — symmetric read capability is
+  // dual-interface coherence. These three tools match them on the MCP
+  // surface. Gate: product='cortex'.
+  // -----------------------------------------------------------------
+
+  // L3 read tool: cortex_deliverable_letter_list
+  server.tool(
+    "cortex_deliverable_letter_list",
+    "Cortex (design accelerator): list the deliverable letters for an engagement, newest-first, " +
+      "optionally filtered to a single status (draft or sent). Requires a Cortex-product API key.",
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the engagement. Required."),
+      status: z
+        .enum(["draft", "sent"])
+        .optional()
+        .describe(
+          "Optional status filter. Omit to list letters in every status.",
+        ),
+    },
+    async ({ engagement_id, status }) => {
+      const gate = requireProduct("cortex_deliverable_letter_list", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.listDeliverableLetters({
+          engagementId: engagement_id,
+          status,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_deliverable_letter_list",
+          engagement_id,
+          status,
+          count: response.deliverableLetters.length,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            response.deliverableLetters.map(lSurfaceProvenance),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_deliverable_letter_list", err),
+        );
+      }
+    },
+  );
+
+  // L3 read tool: cortex_deliverable_letter_fetch
+  server.tool(
+    "cortex_deliverable_letter_fetch",
+    "Cortex (design accelerator): fetch a single deliverable-letter atom by id, including its " +
+      "ordered sections and per-section provenance. Requires a Cortex-product API key.",
+    {
+      letter_id: z
+        .string()
+        .min(1)
+        .describe("entityId of the deliverable letter. Required."),
+    },
+    async ({ letter_id }) => {
+      const gate = requireProduct("cortex_deliverable_letter_fetch", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.getDeliverableLetter({
+          letterId: letter_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_deliverable_letter_fetch",
+          letter_id,
+          tier,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            lSurfaceProvenance(response.deliverableLetter),
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("cortex_deliverable_letter_fetch", err),
+        );
+      }
+    },
+  );
+
+  // L6 read tool: cortex_deliverable_letter_render_download
+  server.tool(
+    "cortex_deliverable_letter_render_download",
+    "Cortex (design accelerator): download the rendered DOCX or PDF file for a " +
+      "deliverable-letter-render atom. Returns the file as an embedded resource (a base64 blob) " +
+      "with its content type, plus a metadata summary. Use cortex_deliverable_letter_renders_list " +
+      "to find a render's id. Requires a Cortex-product API key.",
+    {
+      render_id: z
+        .string()
+        .min(1)
+        .describe(
+          "entityId of the deliverable-letter-render to download. Required.",
+        ),
+    },
+    async ({ render_id }) => {
+      const gate = requireProduct(
+        "cortex_deliverable_letter_render_download",
+        "cortex",
+      );
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const download = await legacyClient.downloadDeliverableLetterRender({
+          renderId: render_id,
+        });
+        logger.info("tool_call", {
+          tool: "cortex_deliverable_letter_render_download",
+          render_id,
+          content_type: download.contentType,
+          byte_length: download.bytes.byteLength,
+          tier,
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  render_id,
+                  filename: download.filename,
+                  content_type: download.contentType,
+                  byte_length: download.bytes.byteLength,
+                },
+                null,
+                2,
+              ),
+            },
+            {
+              type: "resource" as const,
+              resource: {
+                uri: `cortex://deliverable-letter-render/${render_id}/${download.filename}`,
+                mimeType: download.contentType,
+                blob: Buffer.from(download.bytes).toString("base64"),
+              },
+            },
+          ],
+        };
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure(
+            "cortex_deliverable_letter_render_download",
+            err,
+          ),
+        );
+      }
+    },
+  );
 }

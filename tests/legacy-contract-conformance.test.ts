@@ -21,6 +21,8 @@ import { test } from "node:test";
 
 import {
   ATTACHED_DOCUMENT_SCHEMA,
+  DELIVERABLE_LETTER_FETCH_RESPONSE_SCHEMA,
+  DELIVERABLE_LETTER_LIST_RESPONSE_SCHEMA,
   DELIVERABLE_LETTER_RENDER_SCHEMA,
   DELIVERABLE_LETTER_SCHEMA,
   DETAIL_CALLOUT_SPEC_SCHEMA,
@@ -587,6 +589,67 @@ test("L6 deliverable-letter-render — unsupported format rejected", () => {
     DELIVERABLE_LETTER_RENDER_SCHEMA,
     bad,
     "deliverable-letter-render with bad format",
+  );
+});
+
+// -----------------------------------------------------------------
+// L3/L6 read-endpoint response envelopes (Sprint Amendment 8).
+//
+// cc-agent-C's Lane C.4 added three read endpoints beyond the original
+// write-path-only L3/L6 contract. The two JSON ones get response-envelope
+// schemas, validated here. The third
+// (GET /api/deliverable-letter-renders/:renderId/file) byte-serves the
+// file with no JSON envelope, so it has no schema; its wire behavior
+// (content-type + filename lifted off the response headers) is covered
+// by tests/cortex-deliverable-letter-render.test.ts.
+// -----------------------------------------------------------------
+
+test("L3 deliverable-letter list envelope — conforms (empty, one, many)", () => {
+  for (const n of [0, 1, 3]) {
+    const letters = Array.from({ length: n }, (_, i) => {
+      const l = deliverableLetterFixture();
+      l.entityId = `dl-${i}`;
+      return l;
+    });
+    assertConforms(
+      DELIVERABLE_LETTER_LIST_RESPONSE_SCHEMA,
+      { deliverableLetters: letters },
+      `deliverable-letter list of ${n}`,
+    );
+  }
+});
+
+test("L3 deliverable-letter list envelope — a malformed letter in the array is rejected", () => {
+  const bad = deliverableLetterFixture();
+  (bad as Record<string, unknown>).status = "archived";
+  assertRejects(
+    DELIVERABLE_LETTER_LIST_RESPONSE_SCHEMA,
+    { deliverableLetters: [deliverableLetterFixture(), bad] },
+    "deliverable-letter list with a bad member",
+  );
+});
+
+test("L3 deliverable-letter list envelope — wrong wrapper key rejected", () => {
+  assertRejects(
+    DELIVERABLE_LETTER_LIST_RESPONSE_SCHEMA,
+    { letters: [deliverableLetterFixture()] },
+    "deliverable-letter list with wrong wrapper key",
+  );
+});
+
+test("L3 deliverable-letter fetch envelope — conforms", () => {
+  assertConforms(
+    DELIVERABLE_LETTER_FETCH_RESPONSE_SCHEMA,
+    { deliverableLetter: deliverableLetterFixture() },
+    "deliverable-letter fetch envelope",
+  );
+});
+
+test("L3 deliverable-letter fetch envelope — bare atom without wrapper rejected", () => {
+  assertRejects(
+    DELIVERABLE_LETTER_FETCH_RESPONSE_SCHEMA,
+    deliverableLetterFixture(),
+    "deliverable-letter fetch without wrapper",
   );
 });
 
