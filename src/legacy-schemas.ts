@@ -22,6 +22,13 @@
 // types `spec` as an opaque `Record<string, unknown>` and `accessPolicy`
 // as `string` on purpose (MCP-client ergonomics); the canonical contract
 // is tighter, and this file validates against the canonical contract.
+//
+// Sprint Amendment 8 (2026-05-20) added three L3/L6 read endpoints during
+// Lane C.4. The two JSON ones (`GET .../deliverable-letters` list and
+// `GET /api/deliverable-letters/:id` fetch) get response-envelope schemas
+// below. The third (`GET /api/deliverable-letter-renders/:id/file`)
+// byte-serves the file — no JSON envelope, so no schema; its wire
+// behavior is covered by the legacy-client binary-fetch tests.
 
 import { z } from "zod";
 
@@ -161,6 +168,22 @@ export const DELIVERABLE_LETTER_SCHEMA = z.object({
   actorId: z.string().nullable(),
   principalActorId: z.string().nullable(),
   accessPolicy: ACCESS_POLICY_SCHEMA,
+});
+
+/**
+ * Response envelope for `GET /api/engagements/:engagementId/deliverable-letters`.
+ * Added in Lane C.4, ratified Sprint Amendment 8.
+ */
+export const DELIVERABLE_LETTER_LIST_RESPONSE_SCHEMA = z.object({
+  deliverableLetters: z.array(DELIVERABLE_LETTER_SCHEMA),
+});
+
+/**
+ * Response envelope for `GET /api/deliverable-letters/:letterId`.
+ * Added in Lane C.4, ratified Sprint Amendment 8.
+ */
+export const DELIVERABLE_LETTER_FETCH_RESPONSE_SCHEMA = z.object({
+  deliverableLetter: DELIVERABLE_LETTER_SCHEMA,
 });
 
 // -----------------------------------------------------------------

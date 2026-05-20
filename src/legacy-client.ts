@@ -356,6 +356,10 @@ export interface DeliverableLetterResponse {
   deliverableLetter: DeliverableLetterAtom;
 }
 
+export interface ListDeliverableLettersResponse {
+  deliverableLetters: DeliverableLetterAtom[];
+}
+
 /**
  * Result of the section-completeness check. `missing` lists the
  * required section kinds (cover / intro / signature) absent from the
@@ -533,6 +537,20 @@ export interface ListDeliverableLetterRendersResponse {
   renders: DeliverableLetterRenderAtom[];
 }
 
+/**
+ * The downloaded bytes of a deliverable-letter render. The L6 byte-serve
+ * endpoint (`GET /api/deliverable-letter-renders/:renderId/file`) returns
+ * the file itself, not a JSON envelope — `bytes` carries the raw content,
+ * `contentType` and `filename` come from the response headers
+ * (`Content-Type` / `Content-Disposition`). Added in Lane C.4, ratified
+ * Sprint Amendment 8.
+ */
+export interface DeliverableLetterDownload {
+  bytes: Uint8Array;
+  contentType: string;
+  filename: string;
+}
+
 // -----------------------------------------------------------------
 // Error types — matched to hauska-client.ts conventions so tool
 // handlers can use a uniform error shape across both backends.
@@ -684,6 +702,93 @@ async function snapshotFetch<T>(
 
   const parsed = (await res.json().catch(() => ({}))) as T;
   return { status: res.status, body: parsed };
+}
+
+// Binary fetch wrapper. Used for the L6 byte-serve endpoint, which
+// returns the rendered DOCX/PDF file directly instead of a JSON
+// envelope. Reads the response as bytes and lifts `Content-Type` /
+// `Content-Disposition` off the headers. Bearer-auth, same as
+// legacyFetch(). Error handling mirrors legacyFetch() so tool handlers
+// see one error surface across JSON and binary routes.
+async function legacyFetchBinary(
+  path: string,
+  init?: { timeoutMs?: number },
+): Promise<{
+  status: number;
+  bytes: Uint8Array;
+  contentType: string;
+  contentDisposition: string;
+}> {
+  const url = `${backendUrl()}${path}`;
+  const headers: Record<string, string> = {
+    accept: "*/*",
+    "user-agent": "hauska-mcp-server/0.1",
+  };
+  const apiKey = legacyApiKey();
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    init?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  );
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    throw new LegacyUnreachableError(url, err);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "<no-body>");
+    logger.warn("legacy_http_error", {
+      url,
+      status: res.status,
+      body: text.slice(0, 500),
+    });
+    throw new LegacyHttpError(res.status, url, text);
+  }
+
+  const arrayBuffer = await res.arrayBuffer();
+  return {
+    status: res.status,
+    bytes: new Uint8Array(arrayBuffer),
+    contentType: res.headers.get("content-type") ?? "application/octet-stream",
+    contentDisposition: res.headers.get("content-disposition") ?? "",
+  };
+}
+
+// Pull the filename out of a `Content-Disposition` header. Handles both
+// the plain `filename="..."` form and the RFC 5987 `filename*=UTF-8''...`
+// form. Returns null when the header carries no filename.
+function filenameFromContentDisposition(value: string): string | null {
+  const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(value);
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ""));
+    } catch {
+      return star[1].trim().replace(/^"|"$/g, "");
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(value);
+  return plain?.[1] ? plain[1].trim() : null;
+}
+
+// Fallback render filename when the backend sends no Content-Disposition.
+function defaultRenderFilename(renderId: string, contentType: string): string {
+  const ext = contentType.includes("pdf")
+    ? "pdf"
+    : contentType.includes("wordprocessingml")
+      ? "docx"
+      : "bin";
+  return `${renderId}.${ext}`;
 }
 
 // -----------------------------------------------------------------
@@ -1285,6 +1390,46 @@ export const legacyClient = {
     return body;
   },
 
+  /**
+   * GET /api/engagements/:engagementId/deliverable-letters
+   *
+   * Lists the deliverable letters for an engagement, newest-first,
+   * optionally filtered to a single status. Added in Lane C.4 (the
+   * original L3 contract was write-path only); ratified Sprint
+   * Amendment 8.
+   */
+  async listDeliverableLetters(params: {
+    engagementId: string;
+    status?: DeliverableLetterStatus;
+  }): Promise<ListDeliverableLettersResponse> {
+    const qs = new URLSearchParams();
+    if (params.status !== undefined) qs.set("status", params.status);
+    const query = qs.toString();
+    const { body } = await legacyFetch<ListDeliverableLettersResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/deliverable-letters${
+        query ? `?${query}` : ""
+      }`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/deliverable-letters/:letterId
+   *
+   * Fetches a single deliverable-letter atom by id. Added in Lane C.4;
+   * ratified Sprint Amendment 8.
+   */
+  async getDeliverableLetter(params: {
+    letterId: string;
+  }): Promise<DeliverableLetterResponse> {
+    const { body } = await legacyFetch<DeliverableLetterResponse>(
+      `/api/deliverable-letters/${encodeURIComponent(params.letterId)}`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
   // -----------------------------------------------------------------
   // L4 detail-callout-spec methods (Group 3). MCP-first contract —
   // built to match by cc-agent-C in Lane C.4. All bearer-auth.
@@ -1555,5 +1700,28 @@ export const legacyClient = {
       { method: "GET" },
     );
     return body;
+  },
+
+  /**
+   * GET /api/deliverable-letter-renders/:renderId/file
+   *
+   * Downloads the rendered DOCX/PDF bytes for a render atom. This route
+   * byte-serves the file (not a JSON envelope): the response carries the
+   * raw bytes plus `Content-Type` and `Content-Disposition` headers.
+   * Added in Lane C.4; ratified Sprint Amendment 8.
+   */
+  async downloadDeliverableLetterRender(params: {
+    renderId: string;
+  }): Promise<DeliverableLetterDownload> {
+    const { bytes, contentType, contentDisposition } = await legacyFetchBinary(
+      `/api/deliverable-letter-renders/${encodeURIComponent(params.renderId)}/file`,
+    );
+    return {
+      bytes,
+      contentType,
+      filename:
+        filenameFromContentDisposition(contentDisposition) ??
+        defaultRenderFilename(params.renderId, contentType),
+    };
   },
 };

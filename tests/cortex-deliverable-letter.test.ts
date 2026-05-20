@@ -256,3 +256,64 @@ test("lSurfaceProvenance builds a real DID for a deliverable-letter atom", () =>
   assert.equal(entry.entityType, "deliverable-letter");
   assert.equal(entry.contentHash, "hash-dl");
 });
+
+// -----------------------------------------------------------------
+// listDeliverableLetters — GET .../deliverable-letters (Amendment 8)
+// -----------------------------------------------------------------
+
+test("listDeliverableLetters GETs /api/engagements/:id/deliverable-letters", async () => {
+  mockResponse = {
+    status: 200,
+    body: { deliverableLetters: [letter(), letter({ entityId: "dl-2" })] },
+  };
+  const res = await legacyClient.listDeliverableLetters({
+    engagementId: "eng-1",
+  });
+  const url = new URL(calls[0]!.url);
+  assert.equal(url.pathname, "/api/engagements/eng-1/deliverable-letters");
+  assert.equal(calls[0]!.init?.method, "GET");
+  assert.equal(url.searchParams.has("status"), false);
+  assert.equal(res.deliverableLetters.length, 2);
+});
+
+test("listDeliverableLetters passes the optional status filter", async () => {
+  mockResponse = { status: 200, body: { deliverableLetters: [] } };
+  await legacyClient.listDeliverableLetters({
+    engagementId: "eng-1",
+    status: "sent",
+  });
+  const url = new URL(calls[0]!.url);
+  assert.equal(url.searchParams.get("status"), "sent");
+});
+
+test("listDeliverableLetters sends the bearer token", async () => {
+  process.env.LEGACY_BACKEND_API_KEY = "svc-key-abc";
+  mockResponse = { status: 200, body: { deliverableLetters: [] } };
+  await legacyClient.listDeliverableLetters({ engagementId: "eng-1" });
+  const headers = calls[0]!.init?.headers as Record<string, string> | undefined;
+  assert.equal(headers?.authorization, "Bearer svc-key-abc");
+});
+
+// -----------------------------------------------------------------
+// getDeliverableLetter — GET /api/deliverable-letters/:id (Amendment 8)
+// -----------------------------------------------------------------
+
+test("getDeliverableLetter GETs /api/deliverable-letters/:id", async () => {
+  mockResponse = { status: 200, body: { deliverableLetter: letter() } };
+  const res = await legacyClient.getDeliverableLetter({ letterId: "dl-1" });
+  const url = new URL(calls[0]!.url);
+  assert.equal(url.pathname, "/api/deliverable-letters/dl-1");
+  assert.equal(calls[0]!.init?.method, "GET");
+  assert.equal(res.deliverableLetter.entityId, "dl-1");
+});
+
+test("getDeliverableLetter surfaces a 404 as LegacyHttpError", async () => {
+  mockResponse = {
+    status: 404,
+    body: { error: "deliverable_letter_not_found" },
+  };
+  await assert.rejects(
+    legacyClient.getDeliverableLetter({ letterId: "missing" }),
+    (err: unknown) => err instanceof LegacyHttpError && err.status === 404,
+  );
+});
