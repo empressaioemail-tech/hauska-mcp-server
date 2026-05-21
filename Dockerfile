@@ -14,10 +14,12 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-# Compile.
+# Compile the server and build the static docs site (docs/site/).
 COPY tsconfig.json ./
 COPY src ./src
-RUN npm run build
+COPY scripts ./scripts
+COPY docs/content ./docs/content
+RUN npm run build && npm run build:docs
 
 # --- runtime stage ----------------------------------------------------
 FROM node:20-slim AS runtime
@@ -29,8 +31,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund \
   && npm cache clean --force
 
-# Compiled output.
+# Compiled server and the built docs site.
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/docs/site ./docs/site
 
 # Cloud Run injects PORT (default 8080) and the server reads it; EXPOSE
 # is documentation only. The process drops to the unprivileged node user.

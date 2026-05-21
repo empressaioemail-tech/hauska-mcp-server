@@ -3,6 +3,7 @@
 // from the official MCP TypeScript SDK and registers the tool surface.
 
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import express from "express";
 import dotenv from "dotenv";
@@ -55,6 +56,16 @@ async function main() {
   // running behind Cloud Run or Cloud Armor. Set to a higher integer if
   // chained behind multiple proxies.
   app.set("trust proxy", parseInt(process.env.HAUSKA_TRUST_PROXY ?? "1", 10));
+
+  // Static docs site. Built by `npm run build:docs` into docs/site and
+  // copied into the image; served at /docs (mcp.hauska.dev/docs). The
+  // `extensions` option lets /docs/tiers resolve to tiers.html.
+  app.use(
+    "/docs",
+    express.static(fileURLToPath(new URL("../docs/site", import.meta.url)), {
+      extensions: ["html"],
+    }),
+  );
 
   // Health check. Public, no auth. Always HTTP 200 while the process is
   // alive; the body's `status` field reflects the dependency rollup, so
