@@ -1,0 +1,27 @@
+{
+  "displayName": "MCP p99 latency > 1500ms",
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "p99 /mcp request latency above 1500ms for 5m",
+      "conditionThreshold": {
+        "filter": "resource.type = \"cloud_run_revision\" AND metric.type = \"logging.googleapis.com/user/mcp_request_latency\"",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_99"
+          }
+        ],
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 1500,
+        "duration": "300s",
+        "trigger": { "count": 1 }
+      }
+    }
+  ],
+  "notificationChannels": ["__NOTIFICATION_CHANNEL__"],
+  "documentation": {
+    "content": "p99 /mcp request latency exceeded 1500ms over a 5-minute window. Check the latency-histogram dashboard panel and the most recent deploy. v1 default threshold; tune against real traffic.",
+    "mimeType": "text/markdown"
+  }
+}

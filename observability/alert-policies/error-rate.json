@@ -1,0 +1,18 @@
+{
+  "displayName": "MCP error rate > 1%",
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "request error ratio above 1% for 5m",
+      "conditionMonitoringQueryLanguage": {
+        "query": "{ e: fetch cloud_run_revision :: logging.googleapis.com/user/mcp_request_errors | align rate(5m) ; t: fetch cloud_run_revision :: logging.googleapis.com/user/mcp_requests_total | align rate(5m) } | join | value [ratio: val(0) / val(1)] | condition ratio > 0.01",
+        "duration": "300s"
+      }
+    }
+  ],
+  "notificationChannels": ["__NOTIFICATION_CHANNEL__"],
+  "documentation": {
+    "content": "The /mcp request error rate (5xx responses divided by total completed requests) exceeded 1% over a 5-minute window. v1 default threshold. The MQL ratio query is verified and tuned at apply time (see observability/README.md).",
+    "mimeType": "text/markdown"
+  }
+}
