@@ -11,6 +11,8 @@ docs/site
 pnpm-lock.yaml
 npm-debug.log*
 tests
+examples
+launch
 _research
 _sessions
 observability
