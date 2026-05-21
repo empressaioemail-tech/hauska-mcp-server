@@ -1,0 +1,19 @@
+# Keep the build context small and deterministic. The Dockerfile copies
+# only package.json, package-lock.json, tsconfig.json, and src/; anything
+# else here is belt-and-suspenders.
+node_modules
+dist
+.git
+.github
+.env
+.env.example
+pnpm-lock.yaml
+npm-debug.log*
+tests
+_research
+_sessions
+observability
+docs
+deploy
+*.md
+.DS_Store
