@@ -34,3 +34,11 @@ export function getCurrentProduct(): Product {
   const ctx = requestContext.getStore();
   return ctx?.product ?? "public";
 }
+
+// The correlation id of the in-flight /mcp request. The logger reads
+// this to stamp every line emitted during request handling, so tool
+// handlers do not need to thread the id themselves. Undefined outside
+// the request path (startup logs, direct-handler unit tests).
+export function getCurrentRequestId(): string | undefined {
+  return requestContext.getStore()?.request_id;
+}

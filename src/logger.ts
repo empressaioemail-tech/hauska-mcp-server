@@ -1,51 +1,104 @@
 // Structured logger.
 //
-// Every MCP request and tool call is logged here. The output of this logger
-// is the training data corpus over time. Treat it as a first-class data asset.
+// Every MCP request, response, and tool call is logged here. The log
+// stream is two things at once: the Cloud Logging operational record and
+// the training-data corpus over time. Treat it as a first-class asset.
 //
-// v1 destination is stdout (good for stdout-collecting platforms like Vercel,
-// Cloudflare Workers, or any container runtime forwarding to a log aggregator).
+// Output is line-delimited JSON. Each line carries a `severity` field so
+// Google Cloud Logging classifies it correctly when Cloud Run ingests
+// the container's stdout/stderr. `info` and `warn` go to stdout; `error`
+// goes to stderr.
 //
-// v2 should ship structured logs to a persistent store (Postgres, S3,
-// Snowflake, BigQuery) where they can be queried, joined with outcome data,
-// and used for fine-tuning or evaluation.
+// `request_id` is auto-injected from the request-scoped
+// AsyncLocalStorage context, so every line emitted while handling a
+// /mcp request is correlated without each call site threading the id.
+//
+// Sinks are pluggable. The default sink is the console (stdout/stderr).
+// Stream 2C.2 registers an additional Postgres-index + GCS-payload sink
+// at startup via addLogSink().
 
-const DESTINATION = process.env.HAUSKA_LOG_DESTINATION ?? "stdout";
+import { getCurrentRequestId } from "./request-context.js";
+
 const ENV = process.env.HAUSKA_ENV ?? "development";
 
-type LogLevel = "info" | "warn" | "error";
+export type LogLevel = "info" | "warn" | "error";
 
-interface LogEntry {
+// Maps our level to a Google Cloud Logging LogSeverity string. Cloud
+// Logging honors a `severity` field embedded in the JSON payload.
+const SEVERITY: Record<LogLevel, string> = {
+  info: "INFO",
+  warn: "WARNING",
+  error: "ERROR",
+};
+
+export interface LogEntry {
   ts: string;
+  severity: string;
   level: LogLevel;
   event: string;
   env: string;
+  request_id?: string;
   [key: string]: unknown;
 }
 
-function emit(entry: LogEntry) {
+// A sink receives every emitted entry. Sinks must not throw; emit()
+// guards them anyway as a last backstop.
+export type LogSink = (entry: LogEntry) => void;
+
+function consoleSink(entry: LogEntry): void {
   const line = JSON.stringify(entry);
-  if (DESTINATION === "stdout") {
-    // Use stderr so we never collide with stdout-based transports (like stdio).
-    // For HTTP transport this also keeps logs out of the response stream.
-    console.error(line);
-  } else if (DESTINATION === "file") {
-    // TODO: replace with a real file appender. For dev only.
+  if (entry.level === "error") {
     console.error(line);
   } else {
-    // TODO: Nick. Plug in your real log destination here (Postgres, S3, etc.).
-    console.error(line);
+    console.log(line);
+  }
+}
+
+const sinks: LogSink[] = [consoleSink];
+
+/**
+ * Register an additional log sink. Called once at startup by the
+ * Postgres + GCS log sink (Stream 2C.2). Idempotent registration is the
+ * caller's responsibility.
+ */
+export function addLogSink(sink: LogSink): void {
+  sinks.push(sink);
+}
+
+function emit(
+  level: LogLevel,
+  event: string,
+  fields: Record<string, unknown>,
+): void {
+  const requestId = getCurrentRequestId();
+  const entry: LogEntry = {
+    ts: new Date().toISOString(),
+    severity: SEVERITY[level],
+    level,
+    event,
+    env: ENV,
+    ...(requestId ? { request_id: requestId } : {}),
+    ...fields,
+  };
+  for (const sink of sinks) {
+    try {
+      sink(entry);
+    } catch {
+      // A sink failure must never break request handling. The console
+      // sink is synchronous and effectively cannot throw; a remote sink
+      // is expected to swallow its own errors. This is the last backstop.
+    }
   }
 }
 
 export const logger = {
-  info(event: string, fields: Record<string, unknown> = {}) {
-    emit({ ts: new Date().toISOString(), level: "info", event, env: ENV, ...fields });
+  info(event: string, fields: Record<string, unknown> = {}): void {
+    emit("info", event, fields);
   },
-  warn(event: string, fields: Record<string, unknown> = {}) {
-    emit({ ts: new Date().toISOString(), level: "warn", event, env: ENV, ...fields });
+  warn(event: string, fields: Record<string, unknown> = {}): void {
+    emit("warn", event, fields);
   },
-  error(event: string, fields: Record<string, unknown> = {}) {
-    emit({ ts: new Date().toISOString(), level: "error", event, env: ENV, ...fields });
+  error(event: string, fields: Record<string, unknown> = {}): void {
+    emit("error", event, fields);
   },
 };

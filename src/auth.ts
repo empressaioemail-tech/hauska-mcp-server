@@ -38,6 +38,10 @@ export interface AuthContext {
   rate_limit_id: string;
   remaining_rpm: number;
   remaining_daily: number;
+  // Per-request correlation id. Generated in index.ts before auth runs
+  // and merged into the context so every log line emitted while handling
+  // the request carries it. Absent outside the /mcp request path.
+  request_id?: string;
 }
 
 // Type extension via module augmentation so req.hauska has shape.
