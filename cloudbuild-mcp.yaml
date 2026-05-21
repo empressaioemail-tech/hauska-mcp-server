@@ -1,0 +1,76 @@
+# Cloud Build pipeline for the Hauska MCP Server.
+#
+# Build the container, push it to Artifact Registry, deploy a new Cloud
+# Run revision. Mirrors the SmartCity OS / cortex-api build pattern.
+#
+# One-time project setup (Artifact Registry repo, Secret Manager secrets,
+# runtime service account, IAM) is deploy/setup.sh. Database migrations
+# (npm run migrate) run out of band before the first deploy. See
+# deploy/README.md.
+#
+# Trigger:
+#   gcloud builds submit --project=hauska-prod \
+#     --config=cloudbuild-mcp.yaml \
+#     --substitutions=_HAUSKA_BACKEND_URL=...,_GCS_LOG_BUCKET=...
+
+substitutions:
+  _REGION: us-central1
+  _SERVICE: hauska-mcp-server
+  _AR_REPO: hauska-mcp
+  _RUNTIME_SA: hauska-mcp-runtime
+  # Non-secret runtime config. Secrets are bound from Secret Manager in
+  # the deploy step and never appear here.
+  _HAUSKA_BACKEND_URL: "https://REPLACE-with-cc-agent-E-engine-url"
+  _LEGACY_BACKEND_URL: "https://cortex-api-tds7av26va-uc.a.run.app"
+  _UPSTASH_REDIS_REST_URL: "https://REPLACE-with-upstash-rest-url"
+  _GCS_LOG_BUCKET: "hauska-mcp-logs"
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:latest
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA
+      - --project=$PROJECT_ID
+      - --region=${_REGION}
+      - --platform=managed
+      - --service-account=${_RUNTIME_SA}@$PROJECT_ID.iam.gserviceaccount.com
+      - --min-instances=1
+      - --max-instances=10
+      - --concurrency=80
+      - --cpu=1
+      - --memory=512Mi
+      - --port=8080
+      - --allow-unauthenticated
+      - --set-env-vars=HAUSKA_ENV=production,HAUSKA_TRUST_PROXY=1,HAUSKA_BACKEND_URL=${_HAUSKA_BACKEND_URL},LEGACY_BACKEND_URL=${_LEGACY_BACKEND_URL},UPSTASH_REDIS_REST_URL=${_UPSTASH_REDIS_REST_URL},GCS_LOG_BUCKET=${_GCS_LOG_BUCKET}
+      - --set-secrets=HAUSKA_ENGINE_API_KEY=HAUSKA_ENGINE_API_KEY:latest,LEGACY_BACKEND_API_KEY=LEGACY_BACKEND_API_KEY:latest,LEGACY_SNAPSHOT_SECRET=LEGACY_SNAPSHOT_SECRET:latest,DATABASE_URL=DATABASE_URL:latest,UPSTASH_REDIS_REST_TOKEN=UPSTASH_REDIS_REST_TOKEN:latest,HAUSKA_ADMIN_BOOTSTRAP_KEY=HAUSKA_ADMIN_BOOTSTRAP_KEY:latest
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+timeout: 1200s
