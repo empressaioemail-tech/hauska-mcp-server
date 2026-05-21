@@ -14,6 +14,7 @@
     "test:inspector": "npx @modelcontextprotocol/inspector http://localhost:3000/mcp"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.14.0",
     "@hauska/atom-contract": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@upstash/redis": "^1.34.0",
