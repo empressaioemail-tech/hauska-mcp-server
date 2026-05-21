@@ -1,0 +1,20 @@
+{
+  "name": "hauska-catalog-agent-example",
+  "version": "1.0.0",
+  "description": "Self-contained example agent for the Hauska MCP Server public catalog.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
