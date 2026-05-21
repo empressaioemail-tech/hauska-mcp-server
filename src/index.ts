@@ -14,7 +14,8 @@ import type { NextFunction, Request, Response } from "express";
 import { adminAuthMiddleware, buildAuthMiddleware, type AuthContext } from "./auth.js";
 import { buildAdminRouter } from "./admin.js";
 import { buildHealthReport } from "./health.js";
-import { logger } from "./logger.js";
+import { createLogSink, type LogSinkHandle } from "./log-sink.js";
+import { addLogSink, logger } from "./logger.js";
 import { metrics } from "./metrics.js";
 import { isProduct, type Product } from "./products.js";
 import {
@@ -146,6 +147,29 @@ async function main() {
     authMiddleware = buildAuthMiddleware(rateLimitStore);
   }
 
+  // Structured-log persistence (Stream 2C.2). Production registers the
+  // Postgres request_log index sink, plus a GCS archive sink when
+  // GCS_LOG_BUCKET is set. Dev mode keeps the console sink alone.
+  let logSink: LogSinkHandle | null = null;
+  if (!devMode) {
+    let gcsWriter = null;
+    const gcsBucket = process.env.GCS_LOG_BUCKET;
+    if (gcsBucket) {
+      try {
+        const { createGcsWriter } = await import("./gcs-writer.js");
+        gcsWriter = createGcsWriter(gcsBucket);
+      } catch (err) {
+        logger.error("gcs_writer_init_failed", { error: String(err) });
+      }
+    }
+    logSink = createLogSink({ gcs: gcsWriter });
+    addLogSink(logSink.sink);
+    logger.info("log_sink_registered", {
+      postgres: true,
+      gcs: gcsWriter !== null,
+    });
+  }
+
   // Admin endpoints. Gated by bootstrap key. Mount BEFORE /mcp so a
   // misrouted admin call never reaches the MCP transport. In dev mode
   // the admin router will fail at the DB layer; that is expected.
@@ -232,6 +256,19 @@ async function main() {
       admin: "/admin/keys",
       dev_mode: devMode,
     });
+  });
+
+  // Cloud Run sends SIGTERM before stopping an instance. Flush the
+  // pending GCS log batch so the tail of the archive is not lost.
+  process.on("SIGTERM", () => {
+    logger.info("sigterm_received", {});
+    const done = (): void => process.exit(0);
+    if (logSink) {
+      logSink.stop();
+      logSink.flush().then(done, done);
+    } else {
+      done();
+    }
   });
 }
 
