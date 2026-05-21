@@ -1,0 +1,24 @@
+# Log-based distribution metric: /mcp request latency.
+#
+# Extracts latency_ms from every request_completed log line into a
+# distribution, so Cloud Monitoring can chart and alert on percentiles.
+# Applied by apply.sh via `gcloud logging metrics create --config-from-file`.
+# __SERVICE__ is substituted by apply.sh.
+
+name: mcp_request_latency
+description: "Distribution of /mcp request latency in milliseconds."
+filter: >-
+  resource.type="cloud_run_revision"
+  AND resource.labels.service_name="__SERVICE__"
+  AND jsonPayload.event="request_completed"
+valueExtractor: EXTRACT(jsonPayload.latency_ms)
+metricDescriptor:
+  metricKind: DELTA
+  valueType: DISTRIBUTION
+  unit: ms
+  displayName: "MCP request latency"
+bucketOptions:
+  exponentialBuckets:
+    numFiniteBuckets: 64
+    growthFactor: 1.4
+    scale: 1
