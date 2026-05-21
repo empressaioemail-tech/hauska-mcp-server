@@ -7,3 +7,7 @@ logs/
 .DS_Store
 .vscode/
 .idea/
+
+# Generated docs artifacts (rebuilt by `npm run build:docs`).
+docs/site/
+docs/content/tool-reference.md

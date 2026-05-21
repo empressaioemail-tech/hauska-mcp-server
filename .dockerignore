@@ -1,8 +1,9 @@
 # Keep the build context small and deterministic. The Dockerfile copies
-# only package.json, package-lock.json, tsconfig.json, and src/; anything
-# else here is belt-and-suspenders.
+# package.json, package-lock.json, tsconfig.json, src/, scripts/, and
+# docs/content/; the docs site (docs/site/) is generated inside the build.
 node_modules
 dist
+docs/site
 .git
 .github
 .env
@@ -13,7 +14,6 @@ tests
 _research
 _sessions
 observability
-docs
 deploy
-*.md
+README.md
 .DS_Store
