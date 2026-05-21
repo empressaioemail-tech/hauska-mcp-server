@@ -2,6 +2,8 @@
 // Entry point. Sets up Express with the Streamable HTTP transport
 // from the official MCP TypeScript SDK and registers the tool surface.
 
+import { randomUUID } from "node:crypto";
+
 import express from "express";
 import dotenv from "dotenv";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -9,9 +11,11 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import type { NextFunction, Request, Response } from "express";
 
-import { adminAuthMiddleware, buildAuthMiddleware } from "./auth.js";
+import { adminAuthMiddleware, buildAuthMiddleware, type AuthContext } from "./auth.js";
 import { buildAdminRouter } from "./admin.js";
+import { buildHealthReport } from "./health.js";
 import { logger } from "./logger.js";
+import { metrics } from "./metrics.js";
 import { isProduct, type Product } from "./products.js";
 import {
   buildUpstashStore,
@@ -26,6 +30,22 @@ dotenv.config();
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const ENV = process.env.HAUSKA_ENV ?? "development";
 
+// Bounds the params payload that lands in the structured entry log. Full
+// request payloads (e.g. base64 IFC uploads) are captured by the GCS
+// raw-payload sink (Stream 2C.2), not the structured index.
+function summarizeParams(params: unknown): unknown {
+  if (params === undefined || params === null) return params;
+  try {
+    const json = JSON.stringify(params);
+    if (json.length > 2048) {
+      return { _truncated: true, _bytes: json.length, preview: json.slice(0, 2048) };
+    }
+    return params;
+  } catch {
+    return { _unserializable: true };
+  }
+}
+
 async function main() {
   const app = express();
   app.use(express.json());
@@ -35,14 +55,23 @@ async function main() {
   // chained behind multiple proxies.
   app.set("trust proxy", parseInt(process.env.HAUSKA_TRUST_PROXY ?? "1", 10));
 
-  // Health check. Public, no auth.
-  app.get("/health", (_req, res) => {
-    res.json({
-      status: "ok",
-      service: "hauska-mcp-server",
-      version: "0.1.0",
-      env: ENV,
-    });
+  // Health check. Public, no auth. Always HTTP 200 while the process is
+  // alive; the body's `status` field reflects the dependency rollup, so
+  // the Cloud Run liveness probe stays green even when a downstream
+  // dependency is down.
+  app.get("/health", async (_req, res) => {
+    try {
+      res.json(await buildHealthReport());
+    } catch (err) {
+      logger.error("health_report_error", { error: String(err) });
+      res.json({
+        status: "degraded",
+        service: "hauska-mcp-server",
+        version: "0.1.0",
+        env: ENV,
+        error: "health report failed",
+      });
+    }
   });
 
   // Per-request McpServer + transport factory. Stateless mode
@@ -127,32 +156,62 @@ async function main() {
   // tool handlers (which do not see Express req) can read the caller's
   // tier when shaping per-tier behavior such as attribution surfacing.
   app.post("/mcp", authMiddleware, async (req, res) => {
-    const ctx = req.hauska ?? {
-      tier: "free_anonymous" as const,
-      product: "public" as const,
+    // Generate the correlation id before anything else and bind it into
+    // the request context so every downstream log line carries it.
+    const requestId = randomUUID();
+    const startedAt = Date.now();
+    const base: AuthContext = req.hauska ?? {
+      tier: "free_anonymous",
+      product: "public",
       rate_limit_id: `ip:${req.ip ?? "unknown"}`,
       remaining_rpm: -1,
       remaining_daily: -1,
     };
-    logger.info("mcp_request", {
+    const ctx: AuthContext = { ...base, request_id: requestId };
+
+    // Canonical entry log (per Stream 2C log shape).
+    logger.info("request_received", {
+      request_id: requestId,
       method: req.body?.method,
-      id: req.body?.id,
+      params: summarizeParams(req.body?.params),
       ip: req.ip,
+      key_hash: ctx.key_hash ?? null,
       tier: ctx.tier,
       product: ctx.product,
-      key_id: ctx.key_id,
     });
+
+    // Canonical response log + metrics, recorded once the response is
+    // fully flushed.
+    res.on("finish", () => {
+      const latencyMs = Date.now() - startedAt;
+      const ok = res.statusCode < 500;
+      metrics.recordRequest(latencyMs, ok);
+      logger.info("request_completed", {
+        request_id: requestId,
+        method: req.body?.method,
+        response_status: res.statusCode,
+        latency_ms: latencyMs,
+        tier: ctx.tier,
+      });
+    });
+
     const { transport, close } = await buildPerRequestMcp();
     res.on("close", () => {
       close().catch((err) =>
-        logger.error("mcp_close_error", { error: String(err) }),
+        logger.error("mcp_close_error", {
+          request_id: requestId,
+          error: String(err),
+        }),
       );
     });
     await requestContext.run(ctx, async () => {
       try {
         await transport.handleRequest(req, res, req.body);
       } catch (err) {
-        logger.error("mcp_error", { error: String(err) });
+        logger.error("mcp_error", {
+          request_id: requestId,
+          error: String(err),
+        });
         if (!res.headersSent) {
           res.status(500).json({
             jsonrpc: "2.0",
@@ -165,11 +224,14 @@ async function main() {
   });
 
   app.listen(PORT, () => {
-    console.error(`Hauska MCP server listening on port ${PORT}`);
-    console.error(`Endpoint: http://localhost:${PORT}/mcp`);
-    console.error(`Health: http://localhost:${PORT}/health`);
-    console.error(`Admin: http://localhost:${PORT}/admin/keys`);
-    console.error(`Environment: ${ENV}`);
+    logger.info("server_started", {
+      port: PORT,
+      env: ENV,
+      endpoint: "/mcp",
+      health: "/health",
+      admin: "/admin/keys",
+      dev_mode: devMode,
+    });
   });
 }
 
