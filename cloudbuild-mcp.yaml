@@ -18,6 +18,10 @@ substitutions:
   _SERVICE: hauska-mcp-server
   _AR_REPO: hauska-mcp
   _RUNTIME_SA: hauska-mcp-runtime
+  # Image tag. $SHORT_SHA is only populated for trigger-driven builds;
+  # `gcloud builds submit` from local source leaves it empty, so the tag
+  # is an explicit substitution (pass the git short SHA at submit time).
+  _TAG: latest
   # Non-secret runtime config. Secrets are bound from Secret Manager in
   # the deploy step and never appear here.
   _HAUSKA_BACKEND_URL: "https://REPLACE-with-cc-agent-E-engine-url"
@@ -31,7 +35,7 @@ steps:
     args:
       - build
       - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:${_TAG}
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:latest
       - .
@@ -50,7 +54,7 @@ steps:
       - run
       - deploy
       - ${_SERVICE}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:${_TAG}
       - --project=$PROJECT_ID
       - --region=${_REGION}
       - --platform=managed
@@ -66,7 +70,7 @@ steps:
       - --set-secrets=HAUSKA_ENGINE_API_KEY=HAUSKA_ENGINE_API_KEY:latest,LEGACY_BACKEND_API_KEY=LEGACY_BACKEND_API_KEY:latest,LEGACY_SNAPSHOT_SECRET=LEGACY_SNAPSHOT_SECRET:latest,DATABASE_URL=DATABASE_URL:latest,UPSTASH_REDIS_REST_TOKEN=UPSTASH_REDIS_REST_TOKEN:latest,HAUSKA_ADMIN_BOOTSTRAP_KEY=HAUSKA_ADMIN_BOOTSTRAP_KEY:latest
 
 images:
-  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$SHORT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:${_TAG}
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:latest
 
 options:
