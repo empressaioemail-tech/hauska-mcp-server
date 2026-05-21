@@ -5,12 +5,44 @@ Stream 2D. How the server is containerized and deployed to Cloud Run at
 
 ## Target
 
-- **Project:** `hauska-prod` (new, dedicated to the Hauska commercial
-  layer per ADR-008; operator-created with billing linked).
+- **Project:** `hauska-prod-497015` (display name `hauska-prod`; the
+  dedicated Hauska commercial-layer project per ADR-008). Shared with
+  cc-agent-E's hauska-engine retrieval API.
 - **Service:** `hauska-mcp-server`, Cloud Run, region `us-central1`.
 - **Image:** Artifact Registry,
-  `us-central1-docker.pkg.dev/hauska-prod/hauska-mcp/hauska-mcp-server`.
+  `us-central1-docker.pkg.dev/hauska-prod-497015/hauska-mcp/hauska-mcp-server`.
 - **Domain:** `mcp.hauska.dev`, managed TLS.
+
+## Status — deployed 2026-05-21
+
+The service is **live** at `https://hauska-mcp-server-h7gvu7rgcq-uc.a.run.app`
+(revision `hauska-mcp-server-00001-fgd`, 100% traffic, min-instances 1).
+`deploy/setup.sh` provisioned the project, the six secrets are seeded,
+migration 003 is applied, and observability is live (three log-based
+metrics, two alert policies, the operations dashboard, an email
+notification channel). A `tools/list` round-trip returns the 40-tool
+surface and the `request_log` index has confirmed rows.
+
+Two items remain operator-gated:
+
+1. **`mcp.hauska.dev` custom domain.** `hauska.dev` is not yet verified
+   for this GCP account (`gcloud beta run domain-mappings create` reports
+   only `smartcityos.io` verified). The operator runs
+   `gcloud domains verify hauska.dev` (adds a TXT record at the
+   `hauska.dev` registrar), then re-runs the domain-mapping command in
+   step 7 and adds the CNAME it prints. Until then the service is reached
+   at the `run.app` URL above, which is correct and expected pre-GTM.
+
+2. **Secret rotation.** `LEGACY_BACKEND_API_KEY` and the `DATABASE_URL`
+   password were seeded from the workstation `.env`; the cutover runbook
+   flagged both as exposed. Rotate per `deploy/secrets.md` as post-launch
+   hardening (a no-downtime add-version plus new-revision operation).
+   `HAUSKA_ADMIN_BOOTSTRAP_KEY` was generated fresh during the deploy and
+   lives only in Secret Manager.
+
+`HAUSKA_BACKEND_URL` and `HAUSKA_ENGINE_API_KEY` carry placeholders; they
+are wired to cc-agent-E's hauska-engine retrieval endpoint once Lane E
+Phase E0 deploys it into this project.
 
 ## Files
 

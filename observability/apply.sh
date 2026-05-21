@@ -50,7 +50,8 @@ if [[ -n "${NOTIFICATION_CHANNEL:-}" ]]; then
         -e "s#__NOTIFICATION_CHANNEL__#${NOTIFICATION_CHANNEL}#g" \
         "${HERE}/alert-policies/${policy}.json" > "/tmp/mcp-alert-${policy}.json"
     gcloud monitoring policies create --project="$PROJECT_ID" \
-      --policy-from-file="/tmp/mcp-alert-${policy}.json"
+      --policy-from-file="/tmp/mcp-alert-${policy}.json" \
+      || echo "   !! alert policy ${policy} failed to apply; see observability/README.md (MQL note)"
   done
 else
   echo "!! NOTIFICATION_CHANNEL not set — skipping alert policies."
