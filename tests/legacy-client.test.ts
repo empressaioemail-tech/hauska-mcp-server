@@ -235,3 +235,42 @@ test("LEGACY_BACKEND_URL override changes the base URL", async () => {
     "https://codex-backend.example.com/api/engagements/eng-1/briefing",
   );
 });
+
+test("listPropertyWorkspaces sends requester identity and limit", async () => {
+  mockResponse = { status: 200, body: { workspaces: [] } };
+  await legacyClient.listPropertyWorkspaces({
+    requesterKeyId: "k_abc123",
+    limit: 10,
+  });
+  const url = new URL(calls[0]!.url);
+  assert.equal(url.pathname, "/api/brokerage/v1/workspaces");
+  assert.equal(url.searchParams.get("requesterKeyId"), "k_abc123");
+  assert.equal(url.searchParams.get("limit"), "10");
+});
+
+test("getPropertyWorkspace sends workspace id + requester identity", async () => {
+  mockResponse = { status: 200, body: { workspace: null } };
+  await legacyClient.getPropertyWorkspace({
+    workspaceId: "ws_123",
+    requesterKeyId: "k_abc123",
+  });
+  const url = new URL(calls[0]!.url);
+  assert.equal(url.pathname, "/api/brokerage/v1/workspaces/ws_123");
+  assert.equal(url.searchParams.get("requesterKeyId"), "k_abc123");
+});
+
+test("listWorkspaceShareEdges defaults to caller-specified consent filter", async () => {
+  mockResponse = { status: 200, body: { edges: [] } };
+  await legacyClient.listWorkspaceShareEdges({
+    workspaceId: "ws_123",
+    requesterKeyId: "k_abc123",
+    consentVisibleOnly: true,
+  });
+  const url = new URL(calls[0]!.url);
+  assert.equal(
+    url.pathname,
+    "/api/brokerage/v1/workspaces/ws_123/share-edges",
+  );
+  assert.equal(url.searchParams.get("requesterKeyId"), "k_abc123");
+  assert.equal(url.searchParams.get("consentVisibleOnly"), "true");
+});

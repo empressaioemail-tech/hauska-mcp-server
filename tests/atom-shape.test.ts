@@ -11,7 +11,10 @@ import {
   ATTRIBUTION_STRING,
   buildEnvelope,
   getAtomEnvelope,
+  getPropertyWorkspaceEnvelope,
   listJurisdictionsEnvelope,
+  listPropertyWorkspacesEnvelope,
+  listWorkspaceShareEdgesEnvelope,
   provenanceFromAtom,
   provenanceFromSearchResult,
   queryJurisdictionEnvelope,
@@ -183,4 +186,88 @@ test("queryJurisdictionEnvelope surfaces edition DID plus any permit atoms", () 
 
 test("attribution string is exactly the brand-specified verbatim form", () => {
   assert.equal(ATTRIBUTION_STRING, "Powered by Hauska Engine — hauska.dev");
+});
+
+test("listPropertyWorkspacesEnvelope maps evidence refs into compact provenance", () => {
+  const env = listPropertyWorkspacesEnvelope(
+    {
+      workspaces: [
+        {
+          workspaceId: "ws_1",
+          addressLabel: "251 Cool Water Dr, Bastrop, TX",
+          listingUrls: ["https://example.com/listing/1"],
+          ownerUserId: "u_owner",
+          collaboratorUserIds: ["u_col"],
+          lastActivityAt: "2026-05-28T00:00:00Z",
+          createdAt: "2026-05-27T00:00:00Z",
+          updatedAt: "2026-05-28T00:00:00Z",
+          role: "owner",
+          evidenceRefs: [
+            {
+              refId: "ref_atom_1",
+              kind: "atom",
+              atomDid: "did:hauska:brief-run:ws_1/run_1",
+              observedAt: "2026-05-28T00:00:00Z",
+            },
+          ],
+        },
+      ],
+    },
+    { tier: "developer_pro" },
+  );
+  assert.equal(env.atoms.length, 1);
+  assert.equal(env.atoms[0]!.did, "did:hauska:brief-run:ws_1/run_1");
+  assert.equal(env.atoms[0]!.entityType, "atom");
+});
+
+test("getPropertyWorkspaceEnvelope returns empty atoms when evidence refs are absent", () => {
+  const env = getPropertyWorkspaceEnvelope(
+    {
+      workspace: {
+        workspaceId: "ws_1",
+        addressLabel: "251 Cool Water Dr, Bastrop, TX",
+        listingUrls: [],
+        ownerUserId: "u_owner",
+        collaboratorUserIds: [],
+        lastActivityAt: "2026-05-28T00:00:00Z",
+        createdAt: "2026-05-27T00:00:00Z",
+        updatedAt: "2026-05-28T00:00:00Z",
+        role: "owner",
+        briefRuns: [],
+        attachments: [],
+      },
+    },
+    { tier: "developer_pro" },
+  );
+  assert.equal(env.atoms.length, 0);
+});
+
+test("listWorkspaceShareEdgesEnvelope maps edge evidence refs", () => {
+  const env = listWorkspaceShareEdgesEnvelope(
+    {
+      edges: [
+        {
+          edgeId: "edge_1",
+          workspaceId: "ws_1",
+          fromUserId: "u_owner",
+          toUserId: "u_col",
+          sharedAt: "2026-05-28T00:00:00Z",
+          consentVisible: true,
+          observedAt: "2026-05-28T00:00:00Z",
+          evidenceRefs: [
+            {
+              refId: "share_evt_1",
+              kind: "share-edge",
+              sourceUrl: "/api/brokerage/v1/workspaces/ws_1/share-edges",
+              observedAt: "2026-05-28T00:00:00Z",
+            },
+          ],
+        },
+      ],
+    },
+    { tier: "developer_pro" },
+  );
+  assert.equal(env.atoms.length, 1);
+  assert.equal(env.atoms[0]!.did, "legacy:evidence:share_evt_1");
+  assert.equal(env.atoms[0]!.entityType, "share-edge");
 });
