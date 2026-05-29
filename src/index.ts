@@ -57,15 +57,28 @@ async function main() {
   // chained behind multiple proxies.
   app.set("trust proxy", parseInt(process.env.HAUSKA_TRUST_PROXY ?? "1", 10));
 
-  // Static docs site. Built by `npm run build:docs` into docs/site and
-  // copied into the image; served at /docs (mcp.hauska.dev/docs). The
-  // `extensions` option lets /docs/tiers resolve to tiers.html.
-  app.use(
-    "/docs",
-    express.static(fileURLToPath(new URL("../docs/site", import.meta.url)), {
-      extensions: ["html"],
-    }),
-  );
+  const docsRoot = fileURLToPath(new URL("../docs/site", import.meta.url));
+  const docsStatic = express.static(docsRoot, { extensions: ["html"] });
+
+  // Static docs site. Built by `npm run build:docs` into docs/site.
+  // Served at /docs (mcp.hauska.dev/docs) and mirrored paths for hauska.dev/mcp DNS.
+  app.use("/docs", docsStatic);
+
+  // hauska.dev root discovery files (E2)
+  app.get("/llms.txt", (_req, res) => {
+    res.sendFile(`${docsRoot}/llms.txt`);
+  });
+  app.get("/.well-known/agents.txt", (_req, res) => {
+    res.sendFile(`${docsRoot}/.well-known/agents.txt`);
+  });
+
+  // Canonical docs URL alias (E1): /mcp → MCP landing page
+  app.get(["/mcp", "/mcp/"], (_req, res) => {
+    res.redirect(302, "/docs/mcp.html");
+  });
+  app.get("/mcp/coverage", (_req, res) => {
+    res.redirect(302, "/docs/coverage.html");
+  });
 
   // Health check. Public, no auth. Always HTTP 200 while the process is
   // alive; the body's `status` field reflects the dependency rollup, so
