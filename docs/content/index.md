@@ -1,16 +1,19 @@
 # Hauska MCP Server
 
+**Texas building code MCP + property workspace read API** — Central TX pilot for
+place tools; not a country-scale dossier.
+
 The verified ground-truth layer for AI agents that operate on buildings,
 land, permits, code, and zoning.
 
-Hauska MCP Server is a public Model Context Protocol (MCP) endpoint. Any
-MCP-capable agent can call it to get jurisdiction-grounded answers about
-municipal building codes and zoning, with a source citation on every
-result. It is built for agent builders: developers and teams shipping
-construction-tech, permitting, real-estate-diligence, and civic agents
-that need answers traceable to the actual code text.
+**Docs home:** https://hauska.dev/mcp
 
-## Endpoint
+## Endpoints
+
+| Surface | URL |
+|---------|-----|
+| MCP transport | `https://mcp.hauska.dev/mcp` |
+| Documentation | `https://hauska.dev/mcp` (or `https://mcp.hauska.dev/docs`) |
 
 ```
 https://mcp.hauska.dev/mcp
@@ -29,6 +32,10 @@ Five Layer 1 tools, free, open to every caller:
 - **`list_jurisdictions`** — discover which jurisdictions are loaded.
 - **`query_jurisdiction`** — a per-jurisdiction status snapshot.
 - **`search_permit_atoms`** — find permit-tagged code for a project type.
+
+**Product reads** (API key): place tools (`resolve_place`, `get_place_layers`,
+`get_place_dossier`) and property workspace tools. See
+[capability matrix](capability-matrix.html) and [coverage](coverage.html).
 
 Every result is an *atom*: a unit of code with a stable identifier (DID),
 a content hash, and the source document and adapter it came from. Agents

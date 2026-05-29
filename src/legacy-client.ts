@@ -161,6 +161,43 @@ export interface ListWorkspaceShareEdgesResponse {
 }
 
 // -----------------------------------------------------------------
+// Place API wire types (brokerage v1 / GTM sprint C1).
+// -----------------------------------------------------------------
+
+export interface ResolvePlaceResponse {
+  placeKey: string;
+  jurisdiction_key: string;
+  ll_uuid?: string | null;
+  workspaceDid?: string | null;
+  geocodeConfidence?: number | null;
+  errorClass?: string | null;
+}
+
+export interface PlaceLayerRef {
+  layerKind: string;
+  provenance?: Record<string, unknown>;
+  atomDid?: string | null;
+  asOf?: string | null;
+}
+
+export interface GetPlaceLayersResponse {
+  placeKey: string;
+  jurisdiction_key: string;
+  layers: PlaceLayerRef[];
+  errorClass?: string | null;
+}
+
+export interface GetPlaceDossierResponse {
+  placeKey: string;
+  jurisdiction_key: string;
+  inlineRefs?: Array<Record<string, unknown>>;
+  layers?: Array<Record<string, unknown>>;
+  federalSummaryRefs?: Array<Record<string, unknown>>;
+  asOf?: string | null;
+  errorClass?: string | null;
+}
+
+// -----------------------------------------------------------------
 // Cortex wire types.
 // -----------------------------------------------------------------
 
@@ -1023,6 +1060,60 @@ export const legacyClient = {
     }
     const { body } = await legacyFetch<ListWorkspaceShareEdgesResponse>(
       `/api/brokerage/v1/workspaces/${encodeURIComponent(params.workspaceId)}/share-edges?${qs.toString()}`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * POST /api/brokerage/v1/place/resolve
+   */
+  async resolvePlace(params: {
+    requesterKeyId: string;
+    address?: string;
+    lat?: number;
+    lng?: number;
+  }): Promise<ResolvePlaceResponse> {
+    const jsonBody: Record<string, unknown> = {
+      requesterKeyId: params.requesterKeyId,
+    };
+    if (params.address !== undefined) jsonBody.address = params.address;
+    if (params.lat !== undefined) jsonBody.lat = params.lat;
+    if (params.lng !== undefined) jsonBody.lng = params.lng;
+    const { body } = await legacyFetch<ResolvePlaceResponse>(
+      "/api/brokerage/v1/place/resolve",
+      { method: "POST", jsonBody },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/brokerage/v1/place/:placeKey/layers
+   */
+  async getPlaceLayers(params: {
+    placeKey: string;
+    requesterKeyId: string;
+  }): Promise<GetPlaceLayersResponse> {
+    const qs = new URLSearchParams();
+    qs.set("requesterKeyId", params.requesterKeyId);
+    const { body } = await legacyFetch<GetPlaceLayersResponse>(
+      `/api/brokerage/v1/place/${encodeURIComponent(params.placeKey)}/layers?${qs.toString()}`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/brokerage/v1/place/:placeKey/dossier
+   */
+  async getPlaceDossier(params: {
+    placeKey: string;
+    requesterKeyId: string;
+  }): Promise<GetPlaceDossierResponse> {
+    const qs = new URLSearchParams();
+    qs.set("requesterKeyId", params.requesterKeyId);
+    const { body } = await legacyFetch<GetPlaceDossierResponse>(
+      `/api/brokerage/v1/place/${encodeURIComponent(params.placeKey)}/dossier?${qs.toString()}`,
       { method: "GET" },
     );
     return body;

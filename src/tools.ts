@@ -19,16 +19,25 @@ import {
   codexEnvelope,
   codexProvenance,
   getAtomEnvelope,
+  getPlaceDossierEnvelope,
+  getPlaceLayersEnvelope,
   getPropertyWorkspaceEnvelope,
   listJurisdictionsEnvelope,
   listPropertyWorkspacesEnvelope,
   listWorkspaceShareEdgesEnvelope,
   lSurfaceProvenance,
   queryJurisdictionEnvelope,
+  resolvePlaceEnvelope,
   searchAtomsEnvelope,
   searchPermitAtomsEnvelope,
   type ToolEnvelope,
 } from "./atom-shape.js";
+import {
+  logToolInvocation,
+  placeApiEnabled,
+  type GtmErrorClass,
+} from "./gtm-observability.js";
+import { TOOL_COPY, CODEX_TIER, CORTEX_TIER } from "./tool-copy.js";
 import {
   EngineHttpError,
   EngineUnreachableError,
@@ -94,6 +103,17 @@ function describeEngineFailure(tool: string, err: unknown): string {
   }
   logger.error("tool_unknown_error", { tool, error: String(err) });
   return `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`;
+}
+
+function legacyErrorClass(err: unknown): GtmErrorClass {
+  if (err instanceof LegacyUnreachableError) return "upstream_timeout";
+  if (err instanceof LegacyHttpError) {
+    if (err.status === 401 || err.status === 403) return "auth_reject";
+    if (err.status === 404) return "no_coverage";
+    if (err.status >= 500) return "upstream_timeout";
+    return "validation_error";
+  }
+  return "unknown";
 }
 
 function describeLegacyFailure(tool: string, err: unknown): string {
@@ -183,11 +203,7 @@ export function registerTools(server: McpServer) {
   // -----------------------------------------------------------------
   server.tool(
     "search_atoms",
-    "Search the ingested municipal code corpus for atoms matching a free-text query. " +
-      "Returns ranked atom references with provenance (DID, source adapter, source URL, content hash). " +
-      "Use this when the agent needs to find code sections related to a topic " +
-      "(e.g. setbacks, parking, occupancy). Follow up with get_atom on any returned DID " +
-      "to retrieve the full atom body.",
+    TOOL_COPY.search_atoms,
     {
       query: z.string().min(1).describe("Free-text search query. Required."),
       jurisdiction: z
@@ -220,7 +236,7 @@ export function registerTools(server: McpServer) {
           entityType: entity_type,
           limit,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "search_atoms",
           query,
           jurisdiction,
@@ -241,10 +257,7 @@ export function registerTools(server: McpServer) {
   // -----------------------------------------------------------------
   server.tool(
     "get_atom",
-    "Retrieve a specific atom by its DID (e.g. did:hauska:code-section:bastrop-tx/udc-2024/5.04). " +
-      "Returns the full atom content plus provenance (source adapter, source URL, fetched-at, " +
-      "content hash). When include_composition is true, also returns child atoms reached via " +
-      "atom-link composition edges (cross-references, definitions, amendments).",
+    TOOL_COPY.get_atom,
     {
       atom_id: z
         .string()
@@ -267,7 +280,7 @@ export function registerTools(server: McpServer) {
           atomDid: atom_id,
           includeComposition: include_composition,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "get_atom",
           atom_id,
           tier,
@@ -297,11 +310,7 @@ export function registerTools(server: McpServer) {
   // -----------------------------------------------------------------
   server.tool(
     "query_jurisdiction",
-    "Retrieve a per-jurisdiction status snapshot: which code edition is currently loaded, " +
-      "eval-harness quality bar, atom count, last-refreshed timestamp, drift status. " +
-      "Use this to confirm a jurisdiction is available before issuing search_atoms calls. " +
-      "Parcel-level lookups (zoning, setbacks by parcel) are out of scope at v1; use " +
-      "search_atoms with the jurisdiction filter instead.",
+    TOOL_COPY.query_jurisdiction,
     {
       jurisdiction: z
         .string()
@@ -324,7 +333,7 @@ export function registerTools(server: McpServer) {
           jurisdiction,
           queryType: query_type,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "query_jurisdiction",
           jurisdiction,
           tier,
@@ -355,11 +364,7 @@ export function registerTools(server: McpServer) {
   // -----------------------------------------------------------------
   server.tool(
     "search_permit_atoms",
-    "Search for permit-tagged code atoms relevant to a project type in a jurisdiction. " +
-      "Returns atom references whose body matches the project_type query (e.g. \"single-family residence\", " +
-      "\"commercial tenant finishout\"). This is honest Layer 1 retrieval — the agent should reason " +
-      "over the returned atoms to identify permit requirements. End-to-end permit inference is " +
-      "engine-side reasoning and lives in Codex 1b, not in the Layer 1 substrate.",
+    TOOL_COPY.search_permit_atoms,
     {
       jurisdiction: z
         .string()
@@ -382,7 +387,7 @@ export function registerTools(server: McpServer) {
           jurisdiction,
           projectType: project_type,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "search_permit_atoms",
           jurisdiction,
           project_type,
@@ -402,9 +407,7 @@ export function registerTools(server: McpServer) {
   // -----------------------------------------------------------------
   server.tool(
     "list_jurisdictions",
-    "List all jurisdictions currently loaded in the Hauska Engine, with eval-harness quality " +
-      "bar, atom count, and drift status for each. Call this first if you do not know which " +
-      "jurisdictions are available. Optionally filter to quality-bar-passing jurisdictions only.",
+    TOOL_COPY.list_jurisdictions,
     {
       quality_bar_only: z
         .boolean()
@@ -428,7 +431,7 @@ export function registerTools(server: McpServer) {
           qualityBarOnly: quality_bar_only,
           ...(accessPolicies !== undefined ? { accessPolicies } : {}),
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "list_jurisdictions",
           tier,
           count: response.jurisdictions.length,
@@ -448,8 +451,7 @@ export function registerTools(server: McpServer) {
   // -----------------------------------------------------------------
   server.tool(
     "list_property_workspaces",
-    "List the property workspaces visible to the caller (owner or collaborator), newest-first. " +
-      "Returns stable workspace ids, owner/collaborator ids, timestamps, and compact evidence refs.",
+    TOOL_COPY.list_property_workspaces,
     {
       limit: z
         .number()
@@ -469,7 +471,7 @@ export function registerTools(server: McpServer) {
           requesterKeyId: identity.requesterKeyId,
           limit,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "list_property_workspaces",
           requester_key_id: identity.requesterKeyId,
           tier,
@@ -488,8 +490,7 @@ export function registerTools(server: McpServer) {
   // -----------------------------------------------------------------
   server.tool(
     "get_property_workspace",
-    "Retrieve the full property-workspace package by workspace id when the caller is the owner " +
-      "or an active collaborator. Returns stable ids, timestamps, and compact evidence refs.",
+    TOOL_COPY.get_property_workspace,
     {
       workspace_id: z.string().min(1).describe("Stable workspace id. Required."),
     },
@@ -502,7 +503,7 @@ export function registerTools(server: McpServer) {
           workspaceId: workspace_id,
           requesterKeyId: identity.requesterKeyId,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "get_property_workspace",
           workspace_id,
           requester_key_id: identity.requesterKeyId,
@@ -522,8 +523,7 @@ export function registerTools(server: McpServer) {
   // -----------------------------------------------------------------
   server.tool(
     "list_workspace_share_edges",
-    "List share edges for a workspace with consent-aware visibility. By default, only consent-visible " +
-      "edges are returned. Owner/collaborator access is required.",
+    TOOL_COPY.list_workspace_share_edges,
     {
       workspace_id: z.string().min(1).describe("Stable workspace id. Required."),
       consent_visible_only: z
@@ -544,7 +544,7 @@ export function registerTools(server: McpServer) {
           requesterKeyId: identity.requesterKeyId,
           consentVisibleOnly: consent_visible_only,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "list_workspace_share_edges",
           workspace_id,
           requester_key_id: identity.requesterKeyId,
@@ -555,6 +555,172 @@ export function registerTools(server: McpServer) {
         return envelopeContent(listWorkspaceShareEdgesEnvelope(response, { tier }));
       } catch (err) {
         return errorContent(describeLegacyFailure("list_workspace_share_edges", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Place tool 1: resolve_place
+  // -----------------------------------------------------------------
+  server.tool(
+    "resolve_place",
+    TOOL_COPY.resolve_place,
+    {
+      address: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Street address to geocode (e.g. "1311 Main St, Bastrop, TX"). Provide address OR lat+lng.',
+        ),
+      lat: z.number().optional().describe("Latitude. Required with lng if address omitted."),
+      lng: z.number().optional().describe("Longitude. Required with lat if address omitted."),
+    },
+    async ({ address, lat, lng }) => {
+      const identity = requireIdentifiedCaller("resolve_place");
+      if (!identity.ok) return identity.content;
+      if (!placeApiEnabled()) {
+        logToolInvocation({
+          tool: "resolve_place",
+          error_class: "feature_disabled",
+        });
+        return errorContent(
+          "Place API is not enabled on this deployment (PLACE_API_ENABLED≠true). " +
+            "Operator enables after cortex-api place routes ship.",
+        );
+      }
+      if (!address && (lat === undefined || lng === undefined)) {
+        logToolInvocation({
+          tool: "resolve_place",
+          error_class: "validation_error",
+        });
+        return errorContent("resolve_place: provide address or both lat and lng.");
+      }
+      const tier = getCurrentTier();
+      const started = Date.now();
+      try {
+        const response = await legacyClient.resolvePlace({
+          requesterKeyId: identity.requesterKeyId,
+          address,
+          lat,
+          lng,
+        });
+        logToolInvocation({
+          tool: "resolve_place",
+          tier,
+          jurisdiction_key: response.jurisdiction_key,
+          latency_ms: Date.now() - started,
+          place_key: response.placeKey,
+        });
+        return envelopeContent(resolvePlaceEnvelope(response, { tier }));
+      } catch (err) {
+        logToolInvocation({
+          tool: "resolve_place",
+          tier,
+          error_class: legacyErrorClass(err),
+          latency_ms: Date.now() - started,
+        });
+        return errorContent(describeLegacyFailure("resolve_place", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Place tool 2: get_place_layers
+  // -----------------------------------------------------------------
+  server.tool(
+    "get_place_layers",
+    TOOL_COPY.get_place_layers,
+    {
+      place_key: z.string().min(1).describe("placeKey from resolve_place. Required."),
+    },
+    async ({ place_key }) => {
+      const identity = requireIdentifiedCaller("get_place_layers");
+      if (!identity.ok) return identity.content;
+      if (!placeApiEnabled()) {
+        logToolInvocation({
+          tool: "get_place_layers",
+          error_class: "feature_disabled",
+        });
+        return errorContent(
+          "Place API is not enabled on this deployment (PLACE_API_ENABLED≠true).",
+        );
+      }
+      const tier = getCurrentTier();
+      const started = Date.now();
+      try {
+        const response = await legacyClient.getPlaceLayers({
+          placeKey: place_key,
+          requesterKeyId: identity.requesterKeyId,
+        });
+        const atomCount = response.layers.filter((l) => l.atomDid).length;
+        logToolInvocation({
+          tool: "get_place_layers",
+          tier,
+          jurisdiction_key: response.jurisdiction_key,
+          latency_ms: Date.now() - started,
+          atom_ids_returned: atomCount,
+          layer_count: response.layers.length,
+        });
+        return envelopeContent(getPlaceLayersEnvelope(response, { tier }));
+      } catch (err) {
+        logToolInvocation({
+          tool: "get_place_layers",
+          tier,
+          error_class: legacyErrorClass(err),
+          latency_ms: Date.now() - started,
+        });
+        return errorContent(describeLegacyFailure("get_place_layers", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Place tool 3: get_place_dossier
+  // -----------------------------------------------------------------
+  server.tool(
+    "get_place_dossier",
+    TOOL_COPY.get_place_dossier,
+    {
+      place_key: z.string().min(1).describe("placeKey from resolve_place. Required."),
+    },
+    async ({ place_key }) => {
+      const identity = requireIdentifiedCaller("get_place_dossier");
+      if (!identity.ok) return identity.content;
+      if (!placeApiEnabled()) {
+        logToolInvocation({
+          tool: "get_place_dossier",
+          error_class: "feature_disabled",
+        });
+        return errorContent(
+          "Place API is not enabled on this deployment (PLACE_API_ENABLED≠true).",
+        );
+      }
+      const tier = getCurrentTier();
+      const started = Date.now();
+      try {
+        const response = await legacyClient.getPlaceDossier({
+          placeKey: place_key,
+          requesterKeyId: identity.requesterKeyId,
+        });
+        const refCount =
+          (response.inlineRefs?.length ?? 0) + (response.layers?.length ?? 0);
+        logToolInvocation({
+          tool: "get_place_dossier",
+          tier,
+          jurisdiction_key: response.jurisdiction_key,
+          latency_ms: Date.now() - started,
+          atom_ids_returned: refCount,
+        });
+        return envelopeContent(getPlaceDossierEnvelope(response, { tier }));
+      } catch (err) {
+        logToolInvocation({
+          tool: "get_place_dossier",
+          tier,
+          error_class: legacyErrorClass(err),
+          latency_ms: Date.now() - started,
+        });
+        return errorContent(describeLegacyFailure("get_place_dossier", err));
       }
     },
   );
@@ -572,7 +738,7 @@ export function registerTools(server: McpServer) {
     "Codex (plan review): kick off engine finding generation against an existing submission. " +
       "Returns the generationId for status polling. If a finding-generation job is already in " +
       "flight for the submission, returns that job's generationId with alreadyInFlight=true " +
-      "rather than starting a new one. Requires a Codex-product API key.",
+      "rather than starting a new one. " + CODEX_TIER,
     {
       submission_id: z
         .string()
@@ -589,7 +755,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.generateFindings({
           submissionId: submission_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "codex_finding_generation",
           submission_id,
           tier,
@@ -631,7 +797,7 @@ export function registerTools(server: McpServer) {
       "finding. Pass the finding atom id plus the new text, severity (blocker / concern / advisory), " +
       "category (setback / height / coverage / egress / use / overlay-conflict / divergence-related / " +
       "other), and an optional reviewer comment. A finding can be overridden ONCE; a second override " +
-      "returns a 409 conflict. Requires a Codex-product API key.",
+      "returns a 409 conflict. " + CODEX_TIER,
     {
       finding_id: z
         .string()
@@ -678,7 +844,7 @@ export function registerTools(server: McpServer) {
           category,
           reviewerComment: reviewer_comment,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "codex_override_write",
           finding_id,
           severity,
@@ -716,7 +882,7 @@ export function registerTools(server: McpServer) {
     "Codex (plan review): fetch the parcel briefing for an engagement. " +
       "Returns the briefing wire shape or { briefing: null } when no briefing has been uploaded " +
       "yet. A 404 means the engagement id is unknown (input error, not empty result). " +
-      "Requires a Codex-product API key.",
+      CODEX_TIER,
     {
       engagement_id: z
         .string()
@@ -731,7 +897,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.fetchBriefing({
           engagementId: engagement_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "codex_briefing_fetch",
           engagement_id,
           tier,
@@ -774,7 +940,7 @@ export function registerTools(server: McpServer) {
       "backend auto-triggers classification + finding generation downstream from the inserted " +
       "row; chain into codex_finding_generation if you want to poll status explicitly. " +
       "Optional discipline tag filters the canned-finding library on the reviewer side. " +
-      "Requires a Codex-product API key.",
+      CODEX_TIER,
     {
       engagement_id: z
         .string()
@@ -810,7 +976,7 @@ export function registerTools(server: McpServer) {
           typeof response.submission?.id === "string"
             ? response.submission.id
             : engagement_id;
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "codex_snapshot_ingest",
           engagement_id,
           submission_id: submissionId,
@@ -850,7 +1016,7 @@ export function registerTools(server: McpServer) {
       "to attach to an existing engagement, OR project_name (plus optional revit_central_guid / " +
       "revit_document_path) to create a new engagement at the same time. The payload object " +
       "carries the Revit add-in's snapshot fields (project metadata, sheet refs, address, etc.). " +
-      "Requires a Cortex-product API key.",
+      CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -920,7 +1086,7 @@ export function registerTools(server: McpServer) {
           (typeof response["snapshotId"] === "string" && response["snapshotId"]) ||
           (typeof response["id"] === "string" && response["id"]) ||
           (engagement_id ?? "unknown");
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_snapshot_register",
           engagement_id,
           project_name,
@@ -964,7 +1130,7 @@ export function registerTools(server: McpServer) {
       "files of a few MB are fine, very large models may need a different ingest path). " +
       "Known issue: IFC import has unresolved failure modes carried over from the prior " +
       "sprint; this tool surfaces raw legacy responses so callers see backend errors directly. " +
-      "Requires a Cortex-product API key.",
+      CORTEX_TIER,
     {
       snapshot_id: z
         .string()
@@ -1008,7 +1174,7 @@ export function registerTools(server: McpServer) {
           bytes,
           contentType: "application/octet-stream",
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_ifc_ingest",
           snapshot_id,
           filename,
@@ -1047,7 +1213,7 @@ export function registerTools(server: McpServer) {
       "model wire shape (materializable elements, glTF refs, ingest metadata) or " +
       "{ bimModel: null } when no model has been pushed yet. The legacy backend may " +
       "synthesize a wire shape from a parsed IFC ingest when the bim_models row is absent. " +
-      "Requires a Cortex-product API key.",
+      CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -1062,7 +1228,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.queryBimModel({
           engagementId: engagement_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_bim_model_query",
           engagement_id,
           tier,
@@ -1100,7 +1266,7 @@ export function registerTools(server: McpServer) {
       "flight, returns that job's generationId with alreadyInFlight=true rather than starting " +
       "a new one. The engagement must already have briefing sources uploaded (use the legacy " +
       "UI's source-upload flow); a 400 surfaces when no sources are attached. " +
-      "Requires a Cortex-product API key.",
+      CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -1126,7 +1292,7 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           regenerate,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_briefing_emit",
           engagement_id,
           generation_id: response.generationId,
@@ -1170,7 +1336,7 @@ export function registerTools(server: McpServer) {
     "Cortex (design accelerator): create a response-task within an engagement. A response-task " +
       "tracks a unit of architect follow-up work, typically created from a client comment. " +
       "The task starts in state \"open\". Optionally link it to a source client-comment atom " +
-      "and/or a finding at creation time. Requires a Cortex-product API key.",
+      "and/or a finding at creation time. " + CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -1237,7 +1403,7 @@ export function registerTools(server: McpServer) {
           actorId: actor_id,
           principalActorId: principal_actor_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_response_task_create",
           engagement_id,
           response_task_id: response.responseTask.entityId,
@@ -1264,7 +1430,7 @@ export function registerTools(server: McpServer) {
     "Cortex (design accelerator): transition a response-task to a new state. Valid states are " +
       "open, in-progress, done, cancelled. The backend validates the transition and records an " +
       "audit event; moving to \"done\" stamps the completion timestamp. A forbidden transition " +
-      "returns a 409 conflict. Requires a Cortex-product API key.",
+      "returns a 409 conflict. " + CORTEX_TIER,
     {
       response_task_id: z
         .string()
@@ -1286,7 +1452,7 @@ export function registerTools(server: McpServer) {
           responseTaskId: response_task_id,
           state,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_response_task_update_state",
           response_task_id,
           state,
@@ -1311,7 +1477,7 @@ export function registerTools(server: McpServer) {
   server.tool(
     "cortex_response_task_list",
     "Cortex (design accelerator): list the response-tasks for an engagement, newest-first. " +
-      "Optionally filter to a single state. Requires a Cortex-product API key.",
+      "Optionally filter to a single state. " + CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -1333,7 +1499,7 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           state,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_response_task_list",
           engagement_id,
           state,
@@ -1360,7 +1526,7 @@ export function registerTools(server: McpServer) {
     "cortex_response_task_link",
     "Cortex (design accelerator): link a response-task to a finding by setting the task's " +
       "finding reference. Use this when a task that was created standalone is later scoped to a " +
-      "specific finding. Requires a Cortex-product API key.",
+      "specific finding. " + CORTEX_TIER,
     {
       response_task_id: z
         .string()
@@ -1380,7 +1546,7 @@ export function registerTools(server: McpServer) {
           responseTaskId: response_task_id,
           findingId: finding_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_response_task_link",
           response_task_id,
           finding_id,
@@ -1415,7 +1581,7 @@ export function registerTools(server: McpServer) {
     "Cortex (design accelerator): trigger the structured-content extraction pass on a sheet. " +
       "The backend runs OCR plus structured-annotation extraction (revision clouds, dimensions, " +
       "schedule rows, callouts) and produces a sheet-content-extraction atom. Returns the " +
-      "produced atom. Requires a Cortex-product API key.",
+      "produced atom. " + CORTEX_TIER,
     {
       sheet_id: z
         .string()
@@ -1435,7 +1601,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.triggerSheetContentExtraction({
           sheetId: sheet_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_sheet_content_extraction_trigger",
           sheet_id,
           extracted: response.sheetContentExtraction !== null,
@@ -1462,7 +1628,7 @@ export function registerTools(server: McpServer) {
     "Cortex (design accelerator): fetch the sheet-content-extraction atom for a sheet — the " +
       "OCR text segments and structured annotations produced by a prior extraction pass. " +
       "Returns { sheetContentExtraction: null } when the sheet has not been extracted yet " +
-      "(call cortex_sheet_content_extraction_trigger first). Requires a Cortex-product API key.",
+      "(call cortex_sheet_content_extraction_trigger first). " + CORTEX_TIER,
     {
       sheet_id: z
         .string()
@@ -1480,7 +1646,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.fetchSheetContentExtraction({
           sheetId: sheet_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_sheet_content_extraction_fetch",
           sheet_id,
           found: response.sheetContentExtraction !== null,
@@ -1504,7 +1670,7 @@ export function registerTools(server: McpServer) {
     "Cortex (design accelerator): list the supporting documents attached to an engagement " +
       "(specifications, calculations, product-data sheets, design narratives). Optionally " +
       "filter to a single document type. Returns atom metadata; call " +
-      "cortex_attached_document_fetch for a document's parsed text. Requires a Cortex-product API key.",
+      "cortex_attached_document_fetch for a document's parsed text. " + CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -1526,7 +1692,7 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           documentType: document_type,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_attached_document_list",
           engagement_id,
           document_type,
@@ -1568,7 +1734,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.fetchAttachedDocument({
           attachedDocumentId: attached_document_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_attached_document_fetch",
           attached_document_id,
           tier,
@@ -1665,7 +1831,7 @@ export function registerTools(server: McpServer) {
           actorId: actor_id,
           principalActorId: principal_actor_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_deliverable_letter_create",
           engagement_id,
           letter_id: response.deliverableLetter.entityId,
@@ -1694,7 +1860,7 @@ export function registerTools(server: McpServer) {
       "section_index within the current sections array replaces that section's kind / heading / " +
       "content (its provenance is preserved); section_index equal to the current section count " +
       "appends a new section. Use cortex_deliverable_letter_attach_provenance to link a section " +
-      "to its source atoms. Requires a Cortex-product API key.",
+      "to its source atoms. " + CORTEX_TIER,
     {
       letter_id: z
         .string()
@@ -1728,7 +1894,7 @@ export function registerTools(server: McpServer) {
           heading,
           content,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_deliverable_letter_update_section",
           letter_id,
           section_index,
@@ -1760,7 +1926,7 @@ export function registerTools(server: McpServer) {
       "Pass any combination of response-task, sheet-content-extraction, finding, and " +
       "adjudication-state atom entityIds — they are merged (deduped) into the section's existing " +
       "provenance. This is how a per-comment-response section names exactly the finding plus " +
-      "response-task plus adjudication it answers. Requires a Cortex-product API key.",
+      "response-task plus adjudication it answers. " + CORTEX_TIER,
     {
       letter_id: z
         .string()
@@ -1821,7 +1987,7 @@ export function registerTools(server: McpServer) {
           findingIds: finding_ids,
           adjudicationStateIds: adjudication_state_ids,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_deliverable_letter_attach_provenance",
           letter_id,
           section_index,
@@ -1869,7 +2035,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.checkDeliverableLetterCompleteness({
           letterId: letter_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_deliverable_letter_completeness_check",
           letter_id,
           complete: response.complete,
@@ -1912,7 +2078,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.sendDeliverableLetter({
           letterId: letter_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_deliverable_letter_send",
           letter_id,
           tier,
@@ -1979,7 +2145,7 @@ export function registerTools(server: McpServer) {
       "  - wall-section:  { sectionMark, cutLocation, assemblyLayers: [{ material, thickness, function }], baseDatum, topDatum }\n" +
       "  - wall-type:     { typeMark, assemblyLayers: [{ material, thickness, function }], fireRating, stcRating }\n" +
       "  - room-finish:   { roomName, roomNumber, floorFinish, baseFinish, wallFinish, ceilingFinish, ceilingHeight }\n" +
-      "The new spec starts in push state \"pending\". Requires a Cortex-product API key.",
+      "The new spec starts in push state \"pending\". " + CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -2033,7 +2199,7 @@ export function registerTools(server: McpServer) {
           actorId: actor_id,
           principalActorId: principal_actor_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_detail_callout_spec_create",
           engagement_id,
           detail_type,
@@ -2061,7 +2227,7 @@ export function registerTools(server: McpServer) {
     "Cortex (design accelerator): transition a detail-callout spec to a new push state. Legal " +
       "transitions: pending → pushed; pushed → applied or rejected-by-user; rejected-by-user → " +
       "pending (revise and re-push); applied is terminal. An illegal transition returns a 409 " +
-      "naming the legal next states. Requires a Cortex-product API key.",
+      "naming the legal next states. " + CORTEX_TIER,
     {
       spec_id: z
         .string()
@@ -2083,7 +2249,7 @@ export function registerTools(server: McpServer) {
           specId: spec_id,
           pushState: push_state,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_detail_callout_spec_update_push_state",
           spec_id,
           push_state,
@@ -2142,7 +2308,7 @@ export function registerTools(server: McpServer) {
     "cortex_detail_callout_spec_attach_aps_ref",
     "Cortex (design accelerator): attach the APS Design Automation work-item reference to a " +
       "detail-callout spec. The Revit Connector writes this once a push fires so the spec can " +
-      "be correlated with its APS job. Requires a Cortex-product API key.",
+      "be correlated with its APS job. " + CORTEX_TIER,
     {
       spec_id: z
         .string()
@@ -2165,7 +2331,7 @@ export function registerTools(server: McpServer) {
           specId: spec_id,
           apsTaskRef: aps_task_ref,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_detail_callout_spec_attach_aps_ref",
           spec_id,
           tier,
@@ -2192,7 +2358,7 @@ export function registerTools(server: McpServer) {
   server.tool(
     "cortex_detail_callout_spec_list",
     "Cortex (design accelerator): list the detail-callout specs for an engagement, optionally " +
-      "filtered to a single push state. Requires a Cortex-product API key.",
+      "filtered to a single push state. " + CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -2212,7 +2378,7 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           pushState: push_state,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_detail_callout_spec_list",
           engagement_id,
           push_state,
@@ -2254,7 +2420,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.getDetailCalloutSpec({
           specId: spec_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_detail_callout_spec_get",
           spec_id,
           tier,
@@ -2292,7 +2458,7 @@ export function registerTools(server: McpServer) {
     "Cortex (design accelerator): add a product-spec reference to an engagement — an " +
       "ICC-ES-evaluated product (identified by manufacturer + name) and its ESR number. The " +
       "reference starts with status \"active\"; use cortex_product_spec_reference_refresh_status " +
-      "to re-verify it against the live ICC-ES listing. Requires a Cortex-product API key.",
+      "to re-verify it against the live ICC-ES listing. " + CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -2358,7 +2524,7 @@ export function registerTools(server: McpServer) {
           actorId: actor_id,
           principalActorId: principal_actor_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_product_spec_reference_create",
           engagement_id,
           esr_number,
@@ -2405,7 +2571,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.refreshProductSpecReferenceStatus({
           referenceId: reference_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_product_spec_reference_refresh_status",
           reference_id,
           status: response.productSpecReference.status,
@@ -2434,7 +2600,7 @@ export function registerTools(server: McpServer) {
     "cortex_product_spec_reference_list",
     "Cortex (design accelerator): list the product-spec references for an engagement, optionally " +
       "filtered to a single ICC-ES status. Filter to \"withdrawn\" or \"expired\" to surface " +
-      "references that need review. Requires a Cortex-product API key.",
+      "references that need review. " + CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -2457,7 +2623,7 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           status,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_product_spec_reference_list",
           engagement_id,
           status,
@@ -2499,7 +2665,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.getProductSpecReference({
           referenceId: reference_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_product_spec_reference_get",
           reference_id,
           tier,
@@ -2539,7 +2705,7 @@ export function registerTools(server: McpServer) {
       "file. The render is gated on completeness — an incomplete letter (missing a cover, intro, " +
       "or signature section) is rejected and the response names the missing sections. The render " +
       "pins the source letter's version, so re-rendering after the letter changes produces a " +
-      "distinct render. Requires a Cortex-product API key.",
+      "distinct render. " + CORTEX_TIER,
     {
       letter_id: z
         .string()
@@ -2563,7 +2729,7 @@ export function registerTools(server: McpServer) {
           format,
           renderedByActorId: rendered_by_actor_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_deliverable_letter_render",
           letter_id,
           format,
@@ -2612,7 +2778,7 @@ export function registerTools(server: McpServer) {
     "cortex_deliverable_letter_renders_list",
     "Cortex (design accelerator): list every render of a deliverable letter, newest-first. A " +
       "letter is one-to-many with its renders — format changes and re-renders against an updated " +
-      "source letter each produce a distinct render atom. Requires a Cortex-product API key.",
+      "source letter each produce a distinct render atom. " + CORTEX_TIER,
     {
       letter_id: z
         .string()
@@ -2630,7 +2796,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.listDeliverableLetterRenders({
           letterId: letter_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_deliverable_letter_renders_list",
           letter_id,
           count: response.renders.length,
@@ -2669,7 +2835,7 @@ export function registerTools(server: McpServer) {
   server.tool(
     "cortex_deliverable_letter_list",
     "Cortex (design accelerator): list the deliverable letters for an engagement, newest-first, " +
-      "optionally filtered to a single status (draft or sent). Requires a Cortex-product API key.",
+      "optionally filtered to a single status (draft or sent). " + CORTEX_TIER,
     {
       engagement_id: z
         .string()
@@ -2691,7 +2857,7 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           status,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_deliverable_letter_list",
           engagement_id,
           status,
@@ -2717,7 +2883,7 @@ export function registerTools(server: McpServer) {
   server.tool(
     "cortex_deliverable_letter_fetch",
     "Cortex (design accelerator): fetch a single deliverable-letter atom by id, including its " +
-      "ordered sections and per-section provenance. Requires a Cortex-product API key.",
+      "ordered sections and per-section provenance. " + CORTEX_TIER,
     {
       letter_id: z
         .string()
@@ -2732,7 +2898,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.getDeliverableLetter({
           letterId: letter_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_deliverable_letter_fetch",
           letter_id,
           tier,
@@ -2758,7 +2924,7 @@ export function registerTools(server: McpServer) {
     "Cortex (design accelerator): download the rendered DOCX or PDF file for a " +
       "deliverable-letter-render atom. Returns the file as an embedded resource (a base64 blob) " +
       "with its content type, plus a metadata summary. Use cortex_deliverable_letter_renders_list " +
-      "to find a render's id. Requires a Cortex-product API key.",
+      "to find a render's id. " + CORTEX_TIER,
     {
       render_id: z
         .string()
@@ -2778,7 +2944,7 @@ export function registerTools(server: McpServer) {
         const download = await legacyClient.downloadDeliverableLetterRender({
           renderId: render_id,
         });
-        logger.info("tool_call", {
+        logToolInvocation({
           tool: "cortex_deliverable_letter_render_download",
           render_id,
           content_type: download.contentType,

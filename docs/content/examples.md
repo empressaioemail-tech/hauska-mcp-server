@@ -1,5 +1,12 @@
 # Example queries
 
+## Place dossier agent (product key)
+
+Full flow `search_atoms` → `get_atom` → `resolve_place` → `get_place_dossier`:
+
+https://github.com/empressaioemail-tech/hauska-mcp-server/tree/main/examples/place-dossier-agent
+
+
 A full discovery-to-citation flow against the public catalog. Every call
 is a standard MCP `tools/call`; the snippets below show the tool name and
 arguments your agent passes.

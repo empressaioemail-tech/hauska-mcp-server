@@ -15,8 +15,11 @@ const SITE_DIR = fileURLToPath(new URL("../docs/site", import.meta.url));
 
 // Nav order and friendly labels. Files not listed append after these.
 const NAV: Array<[string, string]> = [
+  ["mcp", "MCP home"],
   ["index", "Overview"],
   ["tool-reference", "Tool reference"],
+  ["capability-matrix", "Capability matrix"],
+  ["coverage", "Central TX coverage"],
   ["examples", "Example queries"],
   ["quickstart-claude-desktop", "Quickstart: Claude Desktop"],
   ["quickstart-claude-code", "Quickstart: Claude Code"],
@@ -25,6 +28,7 @@ const NAV: Array<[string, string]> = [
   ["tiers", "Tiers and limits"],
   ["pricing", "Pricing"],
   ["attribution", "Attribution"],
+  ["commercial-use", "Commercial use"],
   ["terms", "Terms of Service"],
   ["privacy", "Privacy"],
 ];
@@ -110,6 +114,41 @@ function titleOf(md: string, slug: string): string {
   return m ? m[1]!.trim() : label(slug);
 }
 
+const COVERAGE_API_URL =
+  process.env.COVERAGE_API_URL ??
+  "https://api.hauska.dev/api/brokerage/v1/coverage";
+
+const MCP_TRANSPORT = "https://mcp.hauska.dev/mcp";
+const DOCS_HOME = "https://hauska.dev/mcp";
+
+function writeAgentDiscoveryFiles(): void {
+  const llms = `# Hauska MCP Server
+> Texas building code MCP + property workspace read API (Central TX pilot for place tools).
+
+- MCP endpoint: ${MCP_TRANSPORT}
+- Documentation: ${DOCS_HOME}
+- ICP: Agent builders shipping construction-tech, permitting, diligence, and civic agents
+- Public catalog: search_atoms, get_atom, list_jurisdictions, query_jurisdiction, search_permit_atoms (no API key)
+- Product reads: resolve_place, get_place_layers, get_place_dossier, property workspace tools (API key)
+- Coverage: ${COVERAGE_API_URL}
+- Support: support@hauska.dev
+- Attribution: Powered by Hauska Engine — hauska.dev (free tier)
+`;
+
+  const agents = `# Hauska agents discovery
+contact: support@hauska.dev
+docs: ${DOCS_HOME}
+mcp: ${MCP_TRANSPORT}
+llms_txt: https://hauska.dev/llms.txt
+coverage: ${COVERAGE_API_URL}
+capabilities: ${DOCS_HOME}/capability-matrix.html
+`;
+
+  writeFileSync(`${SITE_DIR}/llms.txt`, llms);
+  mkdirSync(`${SITE_DIR}/.well-known`, { recursive: true });
+  writeFileSync(`${SITE_DIR}/.well-known/agents.txt`, agents);
+}
+
 function main(): void {
   mkdirSync(SITE_DIR, { recursive: true });
   const files = readdirSync(CONTENT_DIR).filter((f) => f.endsWith(".md"));
@@ -119,10 +158,19 @@ function main(): void {
   }
   for (const f of files) {
     const slug = f.replace(/\.md$/, "");
-    const md = readFileSync(`${CONTENT_DIR}/${f}`, "utf8");
+    let md = readFileSync(`${CONTENT_DIR}/${f}`, "utf8");
+    if (slug === "coverage") {
+      md = md.replace("__COVERAGE_API_URL__", COVERAGE_API_URL);
+    }
     const body = marked.parse(md, { async: false }) as string;
     writeFileSync(`${SITE_DIR}/${slug}.html`, page(slug, body, titleOf(md, slug)));
   }
+  // hauska.dev/mcp landing → mcp.html
+  writeFileSync(
+    `${SITE_DIR}/mcp-index.html`,
+    readFileSync(`${SITE_DIR}/mcp.html`, "utf8"),
+  );
+  writeAgentDiscoveryFiles();
   console.error(`build-docs: rendered ${files.length} page(s) to docs/site/`);
 }
 

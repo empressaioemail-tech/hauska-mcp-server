@@ -26,9 +26,12 @@ import type {
   SearchResponse,
 } from "./hauska-client.js";
 import type {
+  GetPlaceDossierResponse,
+  GetPlaceLayersResponse,
   GetPropertyWorkspaceResponse,
   ListPropertyWorkspacesResponse,
   ListWorkspaceShareEdgesResponse,
+  ResolvePlaceResponse,
   WorkspaceEvidenceRef,
 } from "./legacy-client.js";
 
@@ -380,4 +383,40 @@ export function listWorkspaceShareEdgesEnvelope(
     (edge.evidenceRefs ?? []).map(provenanceFromWorkspaceEvidence),
   );
   return buildEnvelope(response, atoms, options);
+}
+
+export function resolvePlaceEnvelope(
+  response: ResolvePlaceResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<ResolvePlaceResponse> {
+  return buildEnvelope(response, [], options);
+}
+
+export function getPlaceLayersEnvelope(
+  response: GetPlaceLayersResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<GetPlaceLayersResponse> {
+  const atoms = response.layers
+    .filter((l) => l.atomDid)
+    .map((l) => ({
+      did: l.atomDid!,
+      entityType: l.layerKind,
+      entityId: l.layerKind,
+      jurisdictionTenant: response.jurisdiction_key,
+      contentHash: null,
+      cidNote: CID_NOTE,
+      source: {
+        adapter: (l.provenance?.adapter as string | null) ?? "place-layer",
+        url: (l.provenance?.url as string | null) ?? null,
+        fetchedAt: l.asOf ?? null,
+      },
+    }));
+  return buildEnvelope(response, atoms, options);
+}
+
+export function getPlaceDossierEnvelope(
+  response: GetPlaceDossierResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<GetPlaceDossierResponse> {
+  return buildEnvelope(response, [], options);
 }

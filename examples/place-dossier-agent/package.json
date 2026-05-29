@@ -1,0 +1,17 @@
+{
+  "name": "hauska-place-dossier-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Example: search_atoms → get_atom → resolve_place → get_place_dossier",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

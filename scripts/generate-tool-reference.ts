@@ -36,9 +36,20 @@ interface ToolDef {
   };
 }
 
-function productOf(name: string): "Public catalog" | "Codex" | "Cortex" {
+function productOf(
+  name: string,
+): "Public catalog" | "Place and workspace" | "Codex" | "Cortex" {
   if (name.startsWith("codex_")) return "Codex";
   if (name.startsWith("cortex_")) return "Cortex";
+  if (
+    name.startsWith("resolve_place") ||
+    name.startsWith("get_place_") ||
+    name.startsWith("list_property_") ||
+    name.startsWith("get_property_") ||
+    name.startsWith("list_workspace_")
+  ) {
+    return "Place and workspace";
+  }
   return "Public catalog";
 }
 
@@ -92,6 +103,7 @@ async function main(): Promise<void> {
 
   const groups: Record<string, ToolDef[]> = {
     "Public catalog": [],
+    "Place and workspace": [],
     Codex: [],
     Cortex: [],
   };
@@ -102,6 +114,10 @@ async function main(): Promise<void> {
     "Public catalog":
       "Layer 1 jurisdiction and building-code retrieval. No API key " +
       "required; these tools are open to every caller.",
+    "Place and workspace":
+      "Central TX place graph and property workspace reads. Require an " +
+      "authenticated API key (cortex/brokerage product). Place tools need " +
+      "PLACE_API_ENABLED on the MCP deployment.",
     Codex:
       "Plan-review tools. Require a `codex`-product API key.",
     Cortex:
