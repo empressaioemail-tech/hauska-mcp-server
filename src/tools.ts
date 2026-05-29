@@ -19,7 +19,10 @@ import {
   codexEnvelope,
   codexProvenance,
   getAtomEnvelope,
+  getPropertyWorkspaceEnvelope,
   listJurisdictionsEnvelope,
+  listPropertyWorkspacesEnvelope,
+  listWorkspaceShareEdgesEnvelope,
   lSurfaceProvenance,
   queryJurisdictionEnvelope,
   searchAtomsEnvelope,
@@ -38,7 +41,11 @@ import {
 } from "./legacy-client.js";
 import { logger } from "./logger.js";
 import type { Product } from "./products.js";
-import { getCurrentProduct, getCurrentTier } from "./request-context.js";
+import {
+  getCurrentAuthContext,
+  getCurrentProduct,
+  getCurrentTier,
+} from "./request-context.js";
 
 const ATOM_DID_REGEX = /^did:hauska:[a-z-]+:[^\s]+$/;
 
@@ -146,6 +153,25 @@ export function requireProduct(
     ok: false,
     content: errorContent(
       `Tool "${tool}" requires a "${expected}"-product API key. The caller is on product "${actual}". Contact support@hauska.dev to request access.`,
+    ),
+  };
+}
+
+function requireIdentifiedCaller(
+  tool: string,
+): { ok: true; requesterKeyId: string } | {
+  ok: false;
+  content: ReturnType<typeof errorContent>;
+} {
+  const keyId = getCurrentAuthContext()?.key_id;
+  if (typeof keyId === "string" && keyId.length > 0) {
+    return { ok: true, requesterKeyId: keyId };
+  }
+  logger.warn("tool_identity_required", { tool });
+  return {
+    ok: false,
+    content: errorContent(
+      `Tool "${tool}" requires an authenticated API key so owner/collaborator access can be verified.`,
     ),
   };
 }
@@ -412,6 +438,123 @@ export function registerTools(server: McpServer) {
         return envelopeContent(listJurisdictionsEnvelope(response, { tier }));
       } catch (err) {
         return errorContent(describeEngineFailure("list_jurisdictions", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Brokerage tool 1: list_property_workspaces
+  // List owner/collaborator-visible workspaces, newest-first.
+  // -----------------------------------------------------------------
+  server.tool(
+    "list_property_workspaces",
+    "List the property workspaces visible to the caller (owner or collaborator), newest-first. " +
+      "Returns stable workspace ids, owner/collaborator ids, timestamps, and compact evidence refs.",
+    {
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .default(25)
+        .describe("Maximum number of workspace summaries to return. Defaults to 25."),
+    },
+    async ({ limit }) => {
+      const identity = requireIdentifiedCaller("list_property_workspaces");
+      if (!identity.ok) return identity.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.listPropertyWorkspaces({
+          requesterKeyId: identity.requesterKeyId,
+          limit,
+        });
+        logger.info("tool_call", {
+          tool: "list_property_workspaces",
+          requester_key_id: identity.requesterKeyId,
+          tier,
+          count: response.workspaces.length,
+        });
+        return envelopeContent(listPropertyWorkspacesEnvelope(response, { tier }));
+      } catch (err) {
+        return errorContent(describeLegacyFailure("list_property_workspaces", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Brokerage tool 2: get_property_workspace
+  // Fetch full workspace package (owner/collaborator gated).
+  // -----------------------------------------------------------------
+  server.tool(
+    "get_property_workspace",
+    "Retrieve the full property-workspace package by workspace id when the caller is the owner " +
+      "or an active collaborator. Returns stable ids, timestamps, and compact evidence refs.",
+    {
+      workspace_id: z.string().min(1).describe("Stable workspace id. Required."),
+    },
+    async ({ workspace_id }) => {
+      const identity = requireIdentifiedCaller("get_property_workspace");
+      if (!identity.ok) return identity.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.getPropertyWorkspace({
+          workspaceId: workspace_id,
+          requesterKeyId: identity.requesterKeyId,
+        });
+        logger.info("tool_call", {
+          tool: "get_property_workspace",
+          workspace_id,
+          requester_key_id: identity.requesterKeyId,
+          tier,
+          found: response.workspace !== null,
+        });
+        return envelopeContent(getPropertyWorkspaceEnvelope(response, { tier }));
+      } catch (err) {
+        return errorContent(describeLegacyFailure("get_property_workspace", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Brokerage tool 3: list_workspace_share_edges
+  // Consent-aware share-edge visibility for one workspace.
+  // -----------------------------------------------------------------
+  server.tool(
+    "list_workspace_share_edges",
+    "List share edges for a workspace with consent-aware visibility. By default, only consent-visible " +
+      "edges are returned. Owner/collaborator access is required.",
+    {
+      workspace_id: z.string().min(1).describe("Stable workspace id. Required."),
+      consent_visible_only: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe(
+          "If true, return only consent-visible edges. Defaults to true.",
+        ),
+    },
+    async ({ workspace_id, consent_visible_only }) => {
+      const identity = requireIdentifiedCaller("list_workspace_share_edges");
+      if (!identity.ok) return identity.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.listWorkspaceShareEdges({
+          workspaceId: workspace_id,
+          requesterKeyId: identity.requesterKeyId,
+          consentVisibleOnly: consent_visible_only,
+        });
+        logger.info("tool_call", {
+          tool: "list_workspace_share_edges",
+          workspace_id,
+          requester_key_id: identity.requesterKeyId,
+          tier,
+          consent_visible_only,
+          count: response.edges.length,
+        });
+        return envelopeContent(listWorkspaceShareEdgesEnvelope(response, { tier }));
+      } catch (err) {
+        return errorContent(describeLegacyFailure("list_workspace_share_edges", err));
       }
     },
   );

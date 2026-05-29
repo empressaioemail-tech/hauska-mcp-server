@@ -25,6 +25,12 @@ import type {
   QueryJurisdictionResponse,
   SearchResponse,
 } from "./hauska-client.js";
+import type {
+  GetPropertyWorkspaceResponse,
+  ListPropertyWorkspacesResponse,
+  ListWorkspaceShareEdgesResponse,
+  WorkspaceEvidenceRef,
+} from "./legacy-client.js";
 
 export const ATTRIBUTION_STRING = "Powered by Hauska Engine — hauska.dev";
 
@@ -323,4 +329,55 @@ export function lSurfaceProvenance(
       fetchedAt: atom.fetchedAt,
     },
   };
+}
+
+function provenanceFromWorkspaceEvidence(
+  evidence: WorkspaceEvidenceRef,
+): AtomProvenanceEntry {
+  const did = evidence.atomDid ?? `legacy:evidence:${evidence.refId}`;
+  const entityType = evidence.kind;
+  const entityId = evidence.refId;
+  return {
+    did,
+    entityType,
+    entityId,
+    jurisdictionTenant: "brokerage",
+    contentHash: null,
+    cidNote:
+      "Brokerage evidence ref. Use atomDid when present; otherwise this is a stable edge/reference id.",
+    source: {
+      adapter: "legacy-design-tools",
+      url: evidence.sourceUrl ?? null,
+      fetchedAt: evidence.observedAt ?? null,
+    },
+  };
+}
+
+export function listPropertyWorkspacesEnvelope(
+  response: ListPropertyWorkspacesResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<ListPropertyWorkspacesResponse> {
+  const atoms = response.workspaces.flatMap((workspace) =>
+    (workspace.evidenceRefs ?? []).map(provenanceFromWorkspaceEvidence),
+  );
+  return buildEnvelope(response, atoms, options);
+}
+
+export function getPropertyWorkspaceEnvelope(
+  response: GetPropertyWorkspaceResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<GetPropertyWorkspaceResponse> {
+  const atoms =
+    response.workspace?.evidenceRefs?.map(provenanceFromWorkspaceEvidence) ?? [];
+  return buildEnvelope(response, atoms, options);
+}
+
+export function listWorkspaceShareEdgesEnvelope(
+  response: ListWorkspaceShareEdgesResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<ListWorkspaceShareEdgesResponse> {
+  const atoms = response.edges.flatMap((edge) =>
+    (edge.evidenceRefs ?? []).map(provenanceFromWorkspaceEvidence),
+  );
+  return buildEnvelope(response, atoms, options);
 }

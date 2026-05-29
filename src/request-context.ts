@@ -42,3 +42,9 @@ export function getCurrentProduct(): Product {
 export function getCurrentRequestId(): string | undefined {
   return requestContext.getStore()?.request_id;
 }
+
+// Full auth context for tool handlers that need caller identity (for
+// owner/collaborator access checks on backend read APIs).
+export function getCurrentAuthContext(): AuthContext | undefined {
+  return requestContext.getStore();
+}

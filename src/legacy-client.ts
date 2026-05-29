@@ -108,6 +108,59 @@ export interface CreateSubmissionResponse {
 }
 
 // -----------------------------------------------------------------
+// Brokerage V1 workspace retrieval wire types.
+// -----------------------------------------------------------------
+
+export interface WorkspaceEvidenceRef {
+  refId: string;
+  kind: "atom" | "listing" | "attachment" | "share-edge" | "note";
+  atomDid?: string;
+  sourceUrl?: string;
+  observedAt?: string;
+}
+
+export interface PropertyWorkspaceSummary {
+  workspaceId: string;
+  addressLabel: string;
+  listingUrls: string[];
+  ownerUserId: string;
+  collaboratorUserIds: string[];
+  lastActivityAt: string;
+  createdAt: string;
+  updatedAt: string;
+  role: "owner" | "collaborator";
+  evidenceRefs?: WorkspaceEvidenceRef[];
+}
+
+export interface PropertyWorkspaceBundle extends PropertyWorkspaceSummary {
+  briefRuns: Array<Record<string, unknown>>;
+  attachments: Array<Record<string, unknown>>;
+}
+
+export interface ListPropertyWorkspacesResponse {
+  workspaces: PropertyWorkspaceSummary[];
+}
+
+export interface GetPropertyWorkspaceResponse {
+  workspace: PropertyWorkspaceBundle | null;
+}
+
+export interface WorkspaceShareEdge {
+  edgeId: string;
+  workspaceId: string;
+  fromUserId: string;
+  toUserId: string;
+  sharedAt: string;
+  consentVisible: boolean;
+  observedAt: string;
+  evidenceRefs?: WorkspaceEvidenceRef[];
+}
+
+export interface ListWorkspaceShareEdgesResponse {
+  edges: WorkspaceShareEdge[];
+}
+
+// -----------------------------------------------------------------
 // Cortex wire types.
 // -----------------------------------------------------------------
 
@@ -908,6 +961,69 @@ export const legacyClient = {
     const { body } = await legacyFetch<CreateSubmissionResponse>(
       `/api/engagements/${encodeURIComponent(params.engagementId)}/submissions`,
       { method: "POST", jsonBody },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/brokerage/v1/workspaces
+   *
+   * Lists owner/collaborator-visible property workspaces for the caller.
+   * The backend enforces access by caller identity and returns newest-first.
+   */
+  async listPropertyWorkspaces(params: {
+    requesterKeyId: string;
+    limit?: number;
+  }): Promise<ListPropertyWorkspacesResponse> {
+    const qs = new URLSearchParams();
+    qs.set("requesterKeyId", params.requesterKeyId);
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    const query = qs.toString();
+    const { body } = await legacyFetch<ListPropertyWorkspacesResponse>(
+      `/api/brokerage/v1/workspaces${query ? `?${query}` : ""}`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/brokerage/v1/workspaces/:workspaceId
+   *
+   * Fetches a full workspace package if the caller is owner/collaborator.
+   * Returns { workspace: null } when the id is not visible to the caller.
+   */
+  async getPropertyWorkspace(params: {
+    workspaceId: string;
+    requesterKeyId: string;
+  }): Promise<GetPropertyWorkspaceResponse> {
+    const qs = new URLSearchParams();
+    qs.set("requesterKeyId", params.requesterKeyId);
+    const { body } = await legacyFetch<GetPropertyWorkspaceResponse>(
+      `/api/brokerage/v1/workspaces/${encodeURIComponent(params.workspaceId)}?${qs.toString()}`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/brokerage/v1/workspaces/:workspaceId/share-edges
+   *
+   * Lists consent-filtered share edges for one workspace, visible to
+   * owner/collaborator callers.
+   */
+  async listWorkspaceShareEdges(params: {
+    workspaceId: string;
+    requesterKeyId: string;
+    consentVisibleOnly?: boolean;
+  }): Promise<ListWorkspaceShareEdgesResponse> {
+    const qs = new URLSearchParams();
+    qs.set("requesterKeyId", params.requesterKeyId);
+    if (params.consentVisibleOnly !== undefined) {
+      qs.set("consentVisibleOnly", params.consentVisibleOnly ? "true" : "false");
+    }
+    const { body } = await legacyFetch<ListWorkspaceShareEdgesResponse>(
+      `/api/brokerage/v1/workspaces/${encodeURIComponent(params.workspaceId)}/share-edges?${qs.toString()}`,
+      { method: "GET" },
     );
     return body;
   },
