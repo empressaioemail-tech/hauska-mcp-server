@@ -18,7 +18,11 @@ import { z } from "zod";
 import {
   codexEnvelope,
   codexProvenance,
+  credentialPendingEnvelope,
+  encumbrancesEnvelope,
+  generateBriefEnvelope,
   getAtomEnvelope,
+  getBriefRunEnvelope,
   getPlaceDossierEnvelope,
   getPlaceLayersEnvelope,
   getPropertyWorkspaceEnvelope,
@@ -28,8 +32,11 @@ import {
   lSurfaceProvenance,
   queryJurisdictionEnvelope,
   resolvePlaceEnvelope,
+  restrictionsEnvelope,
   searchAtomsEnvelope,
   searchPermitAtomsEnvelope,
+  siteDrainageEnvelope,
+  siteTopographyEnvelope,
   type ToolEnvelope,
 } from "./atom-shape.js";
 import {
@@ -2983,6 +2990,442 @@ export function registerTools(server: McpServer) {
             err,
           ),
         );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tier 1 Group A — Property Brief (generate_property_brief,
+  // get_property_brief_run). Gate: product='cortex'.
+  // -----------------------------------------------------------------
+
+  server.tool(
+    "generate_property_brief",
+    TOOL_COPY.generate_property_brief,
+    {
+      address: z.string().min(1).describe("Street address to brief. Required."),
+      mls_id: z.string().optional().describe("Optional MLS listing id."),
+      source: z
+        .string()
+        .optional()
+        .describe("Optional source label (e.g. mcp-agent)."),
+      presentation_mode: z
+        .enum(["consumer", "pro"])
+        .optional()
+        .default("consumer")
+        .describe("Brief voice: consumer (lay) or pro."),
+    },
+    async ({ address, mls_id, source, presentation_mode }) => {
+      const gate = requireProduct("generate_property_brief", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      const started = Date.now();
+      try {
+        const response = await legacyClient.generateBrief({
+          address,
+          mls_id,
+          source,
+          presentationMode: presentation_mode,
+        });
+        logToolInvocation({
+          tool: "generate_property_brief",
+          tier,
+          run_id: response.runId,
+          jurisdiction_key: response.jurisdiction ?? undefined,
+          latency_ms: Date.now() - started,
+          atom_ids_returned: (response.atoms?.inlineRefs?.length ?? 0) + 1,
+        });
+        return envelopeContent(generateBriefEnvelope(response, { tier }));
+      } catch (err) {
+        logToolInvocation({
+          tool: "generate_property_brief",
+          tier,
+          error_class: legacyErrorClass(err),
+          latency_ms: Date.now() - started,
+        });
+        return errorContent(describeLegacyFailure("generate_property_brief", err));
+      }
+    },
+  );
+
+  server.tool(
+    "get_property_brief_run",
+    TOOL_COPY.get_property_brief_run,
+    {
+      run_id: z
+        .string()
+        .uuid()
+        .describe("brief-run id from generate_property_brief. Required."),
+    },
+    async ({ run_id }) => {
+      const gate = requireProduct("get_property_brief_run", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.getBriefRun({ runId: run_id });
+        logToolInvocation({
+          tool: "get_property_brief_run",
+          run_id,
+          tier,
+        });
+        return envelopeContent(getBriefRunEnvelope(response, { tier }));
+      } catch (err) {
+        return errorContent(describeLegacyFailure("get_property_brief_run", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tier 1 Group B — Hydrology and topography. Gate: product='cortex'.
+  // -----------------------------------------------------------------
+
+  server.tool(
+    "simulate_site_drainage",
+    TOOL_COPY.simulate_site_drainage,
+    {
+      engagement_id: z
+        .string()
+        .uuid()
+        .describe("Engagement id with site topography ingested. Required."),
+      manual_depth_inches: z
+        .number()
+        .positive()
+        .max(50)
+        .optional()
+        .describe("Rainfall depth in inches (default 4 for smoke tests)."),
+      return_period_years: z
+        .number()
+        .int()
+        .positive()
+        .max(500)
+        .optional()
+        .describe("NOAA Atlas 14 return period when not using manual depth."),
+      force_refresh: z
+        .boolean()
+        .optional()
+        .describe("Re-run drainage even when a recent result exists."),
+    },
+    async ({
+      engagement_id,
+      manual_depth_inches,
+      return_period_years,
+      force_refresh,
+    }) => {
+      const gate = requireProduct("simulate_site_drainage", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.refreshSiteDrainage({
+          engagementId: engagement_id,
+          manualDepthInches: manual_depth_inches,
+          returnPeriodYears: return_period_years,
+          forceRefresh: force_refresh,
+        });
+        logToolInvocation({
+          tool: "simulate_site_drainage",
+          engagement_id,
+          tier,
+          flow_line_count: response.flowLineCount,
+        });
+        return envelopeContent(
+          codexEnvelope(
+            response,
+            response.materializableElementId
+              ? {
+                  did: `did:hauska:site-drainage:${response.materializableElementId}`,
+                  entityType: "site-drainage",
+                  entityId: response.materializableElementId,
+                  jurisdictionTenant: "legacy",
+                  contentHash: null,
+                  cidNote:
+                    "Site-drainage materializable element id; canonical atom DID at storage layer.",
+                  source: {
+                    adapter: "legacy-design-tools",
+                    url: `/api/engagements/${engagement_id}/site-drainage/refresh`,
+                    fetchedAt: new Date().toISOString(),
+                  },
+                }
+              : null,
+            { tier },
+          ),
+        );
+      } catch (err) {
+        return errorContent(describeLegacyFailure("simulate_site_drainage", err));
+      }
+    },
+  );
+
+  server.tool(
+    "get_site_drainage",
+    TOOL_COPY.get_site_drainage,
+    {
+      engagement_id: z.string().uuid().describe("Engagement id. Required."),
+      include_design_storms: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("When true, attach NOAA Atlas 14 design-storm estimates."),
+    },
+    async ({ engagement_id, include_design_storms }) => {
+      const gate = requireProduct("get_site_drainage", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const drainage = await legacyClient.getSiteDrainage({
+          engagementId: engagement_id,
+        });
+        const designStorms = include_design_storms
+          ? await legacyClient.getSiteDrainageDesignStorms({
+              engagementId: engagement_id,
+            })
+          : undefined;
+        logToolInvocation({
+          tool: "get_site_drainage",
+          engagement_id,
+          tier,
+          include_design_storms,
+        });
+        const envelope = siteDrainageEnvelope(drainage, engagement_id, { tier });
+        if (designStorms !== undefined) {
+          return envelopeContent({
+            data: { drainage, designStorms },
+            atoms: envelope.atoms,
+            meta: envelope.meta,
+          });
+        }
+        return envelopeContent(envelope);
+      } catch (err) {
+        return errorContent(describeLegacyFailure("get_site_drainage", err));
+      }
+    },
+  );
+
+  server.tool(
+    "get_site_topography",
+    TOOL_COPY.get_site_topography,
+    {
+      engagement_id: z.string().uuid().describe("Engagement id. Required."),
+      refresh: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("When true, POST refresh before reading the active row."),
+      force_refresh: z
+        .boolean()
+        .optional()
+        .describe("Passed to refresh when refresh=true."),
+    },
+    async ({ engagement_id, refresh, force_refresh }) => {
+      const gate = requireProduct("get_site_topography", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        if (refresh) {
+          await legacyClient.refreshSiteTopography({
+            engagementId: engagement_id,
+            forceRefresh: force_refresh,
+          });
+        }
+        const response = await legacyClient.getSiteTopography({
+          engagementId: engagement_id,
+        });
+        logToolInvocation({
+          tool: "get_site_topography",
+          engagement_id,
+          tier,
+          refreshed: refresh,
+        });
+        return envelopeContent(
+          siteTopographyEnvelope(response, engagement_id, { tier }),
+        );
+      } catch (err) {
+        return errorContent(describeLegacyFailure("get_site_topography", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tier 1 Group C — Encumbrances. Gate: product='cortex'.
+  // -----------------------------------------------------------------
+
+  server.tool(
+    "search_encumbrances",
+    TOOL_COPY.search_encumbrances,
+    {
+      workspace_did: z
+        .string()
+        .min(1)
+        .describe(
+          "Property workspace DID (did:hauska:property-workspace:<listingKey>). Required.",
+        ),
+    },
+    async ({ workspace_did }) => {
+      const gate = requireProduct("search_encumbrances", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.searchEncumbrances({
+          workspaceDid: workspace_did,
+        });
+        logToolInvocation({
+          tool: "search_encumbrances",
+          workspace_did,
+          tier,
+          instrument_count: response.instruments.length,
+          clause_count: response.clauses.length,
+        });
+        return envelopeContent(encumbrancesEnvelope(response, { tier }));
+      } catch (err) {
+        return errorContent(describeLegacyFailure("search_encumbrances", err));
+      }
+    },
+  );
+
+  server.tool(
+    "get_restrictions",
+    TOOL_COPY.get_restrictions,
+    {
+      workspace_did: z
+        .string()
+        .min(1)
+        .describe("Property workspace DID. Required."),
+    },
+    async ({ workspace_did }) => {
+      const gate = requireProduct("get_restrictions", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const response = await legacyClient.getRestrictions({
+          workspaceDid: workspace_did,
+        });
+        logToolInvocation({
+          tool: "get_restrictions",
+          workspace_did,
+          tier,
+          clause_count: response.clauses.length,
+        });
+        return envelopeContent(restrictionsEnvelope(response, { tier }));
+      } catch (err) {
+        return errorContent(describeLegacyFailure("get_restrictions", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tier 1 Group D — Cotality data tier (designed, inert). Gate: cortex.
+  // Returns credential-pending when CoreLogic OAuth is absent; never fakes data.
+  // -----------------------------------------------------------------
+
+  const cotalityLocationSchema = {
+    address: z
+      .string()
+      .optional()
+      .describe("Street address for adapter lookup."),
+    lat: z.number().optional().describe("Latitude when address is omitted."),
+    lng: z.number().optional().describe("Longitude when address is omitted."),
+  };
+
+  function wrapCotalityTool(
+    tool: string,
+    call: () => Promise<Record<string, unknown> | import("./legacy-client.js").CredentialPendingResponse>,
+    tier: ReturnType<typeof getCurrentTier>,
+  ) {
+    return call().then((response) => {
+      if (
+        typeof response === "object" &&
+        response !== null &&
+        "status" in response &&
+        response.status === "credential-pending"
+      ) {
+        logToolInvocation({ tool, tier, credential_pending: true });
+        return envelopeContent(
+          credentialPendingEnvelope(
+            response as import("./legacy-client.js").CredentialPendingResponse,
+            { tier },
+          ),
+        );
+      }
+      logToolInvocation({ tool, tier, credential_pending: false });
+      return envelopeContent(codexEnvelope(response, null, { tier }));
+    });
+  }
+
+  server.tool(
+    "get_property_detail",
+    TOOL_COPY.get_property_detail,
+    cotalityLocationSchema,
+    async ({ address, lat, lng }) => {
+      const gate = requireProduct("get_property_detail", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        return await wrapCotalityTool(
+          "get_property_detail",
+          () => legacyClient.getPropertyDetail({ address, lat, lng }),
+          tier,
+        );
+      } catch (err) {
+        return errorContent(describeLegacyFailure("get_property_detail", err));
+      }
+    },
+  );
+
+  server.tool(
+    "get_replacement_cost",
+    TOOL_COPY.get_replacement_cost,
+    cotalityLocationSchema,
+    async ({ address, lat, lng }) => {
+      const gate = requireProduct("get_replacement_cost", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        return await wrapCotalityTool(
+          "get_replacement_cost",
+          () => legacyClient.getReplacementCost({ address, lat, lng }),
+          tier,
+        );
+      } catch (err) {
+        return errorContent(describeLegacyFailure("get_replacement_cost", err));
+      }
+    },
+  );
+
+  server.tool(
+    "get_hazard_profile",
+    TOOL_COPY.get_hazard_profile,
+    cotalityLocationSchema,
+    async ({ address, lat, lng }) => {
+      const gate = requireProduct("get_hazard_profile", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        return await wrapCotalityTool(
+          "get_hazard_profile",
+          () => legacyClient.getHazardProfile({ address, lat, lng }),
+          tier,
+        );
+      } catch (err) {
+        return errorContent(describeLegacyFailure("get_hazard_profile", err));
+      }
+    },
+  );
+
+  server.tool(
+    "get_parcel_polygon",
+    TOOL_COPY.get_parcel_polygon,
+    cotalityLocationSchema,
+    async ({ address, lat, lng }) => {
+      const gate = requireProduct("get_parcel_polygon", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        return await wrapCotalityTool(
+          "get_parcel_polygon",
+          () => legacyClient.getParcelPolygon({ address, lat, lng }),
+          tier,
+        );
+      } catch (err) {
+        return errorContent(describeLegacyFailure("get_parcel_polygon", err));
       }
     },
   );

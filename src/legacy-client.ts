@@ -882,6 +882,176 @@ function defaultRenderFilename(renderId: string, contentType: string): string {
 }
 
 // -----------------------------------------------------------------
+// Tier 1 MCP wire types (Groups A–D, cc-agent-M build-out 2026-06-06).
+//
+// Hand-mirrored from cortex-api route handlers:
+//   brokerageBrief.ts — POST /api/brokerage/v1/brief, GET .../brief/:runId
+//   siteDrainage.ts   — POST/GET /api/engagements/:id/site-drainage(+)
+//   siteTopography.ts — POST/GET /api/engagements/:id/site-topography(+)
+//   brokerageEncumbrances.ts — GET /api/brokerage/v1/workspaces/encumbrances
+//   Cotality adapter pack — MCP-first contract; cc-agent-C exposes routes.
+// -----------------------------------------------------------------
+
+export interface BriefInlineRefWire {
+  did: string;
+  entityType: string;
+  entityId: string;
+  label: string;
+  mode: string;
+}
+
+export interface BriefAtomProjectionWire {
+  workspaceDid: string;
+  briefRunDid: string;
+  placeLayers: Array<Record<string, unknown>>;
+  citationRefs: Array<Record<string, unknown>>;
+  inlineRefs: BriefInlineRefWire[];
+}
+
+export interface GenerateBriefResponse {
+  runId: string;
+  startedAt: string;
+  finishedAt: string;
+  presentationMode?: string;
+  property: Record<string, unknown>;
+  jurisdiction: string | null;
+  corpusStatus: string;
+  geocode?: { lat: number; lon: number };
+  siteContext?: Record<string, unknown>;
+  sections?: Array<Record<string, unknown>>;
+  citations?: Array<Record<string, unknown>>;
+  atoms?: BriefAtomProjectionWire;
+  reasoningSummary?: string;
+  laySummary?: string;
+  privateRestrictions?: Record<string, unknown> | null;
+  meta?: Record<string, unknown>;
+  workspaceId?: string;
+  workspaceDid?: string;
+}
+
+export interface GetBriefRunResponse extends GenerateBriefResponse {}
+
+export interface SiteDrainageRefreshResponse {
+  status: string;
+  atomEventId?: string;
+  eventType?: string;
+  materializableElementId?: string;
+  flowLineCount?: number;
+  drainageZoneCount?: number;
+  rainfallDepthInches?: number;
+  forcingSource?: string;
+  reusedExisting?: boolean;
+  reason?: string;
+  code?: string;
+}
+
+export interface SiteDrainageReadResponse {
+  status: string;
+  materializableElementId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  propertySet?: Record<string, unknown>;
+  reason?: string;
+}
+
+export interface SiteDrainageDesignStormsResponse {
+  status: string;
+  estimate?: Record<string, unknown>;
+  reason?: string;
+}
+
+export interface SiteTopographyRefreshResponse {
+  status: string;
+  atomEventId?: string;
+  eventType?: string;
+  materializableElementId?: string;
+  demGcsObjectPath?: string;
+  contourCount?: number;
+  contourIntervalMeters?: number;
+  demResolutionMeters?: number;
+  parcelOrigin?: Record<string, unknown>;
+  parcelBbox?: Record<string, unknown>;
+  catchmentBbox?: Record<string, unknown>;
+  reusedExisting?: boolean;
+  reason?: string;
+  code?: string;
+}
+
+export interface SiteTopographyReadResponse {
+  status: string;
+  materializableElementId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  propertySet?: Record<string, unknown>;
+  reason?: string;
+}
+
+export interface EncumbranceInstrumentWire {
+  id: string;
+  instrument: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface EncumbranceClauseWire {
+  id: string;
+  instrumentId: string;
+  clause: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface EncumbrancesListResponse {
+  workspaceDid?: string;
+  listingKey?: string;
+  instruments: EncumbranceInstrumentWire[];
+  clauses: EncumbranceClauseWire[];
+}
+
+export interface CredentialPendingResponse {
+  status: "credential-pending";
+  adapter: string;
+  message: string;
+}
+
+export type CotalityAdapterKey =
+  | "cotality:property"
+  | "cotality:replacementCost"
+  | "cotality:hazards"
+  | "cotality:parcels";
+
+const COTALITY_ADAPTER_ROUTES: Record<CotalityAdapterKey, string> = {
+  "cotality:property": "/api/brokerage/v1/cotality/property-detail",
+  "cotality:replacementCost": "/api/brokerage/v1/cotality/replacement-cost",
+  "cotality:hazards": "/api/brokerage/v1/cotality/hazard-profile",
+  "cotality:parcels": "/api/brokerage/v1/cotality/parcel-polygon",
+};
+
+export function cotalityCredentialsConfigured(): boolean {
+  const id = process.env.COTALITY_CLIENT_ID?.trim();
+  const secret = process.env.COTALITY_CLIENT_SECRET?.trim();
+  return Boolean(id && secret);
+}
+
+function mcpServiceHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const token = process.env.LEGACY_MCP_SERVICE_TOKEN?.trim();
+  if (token) headers["x-hauska-mcp-service"] = token;
+  return headers;
+}
+
+async function brokerageFetch<T>(
+  path: string,
+  init?: LegacyFetchInit,
+): Promise<{ status: number; body: T }> {
+  return legacyFetch<T>(path, {
+    ...init,
+    headers: {
+      ...mcpServiceHeaders(),
+      ...(init?.headers as Record<string, string> | undefined),
+    },
+  });
+}
+
+// -----------------------------------------------------------------
 // Client.
 // -----------------------------------------------------------------
 
@@ -1930,5 +2100,267 @@ export const legacyClient = {
         filenameFromContentDisposition(contentDisposition) ??
         defaultRenderFilename(params.renderId, contentType),
     };
+  },
+
+  // -----------------------------------------------------------------
+  // Tier 1 Group A — Property Brief (brokerage v1).
+  // Service path: bearer + optional x-hauska-mcp-service (cc-agent-C).
+  // Without install id the wallet paywall is skipped on the legacy side.
+  // -----------------------------------------------------------------
+
+  /**
+   * POST /api/brokerage/v1/brief
+   *
+   * Generates a Property Brief for an address. Returns reasoningSummary,
+   * laySummary, siteContext, cited atom projection, and a brief-run id.
+   */
+  async generateBrief(params: {
+    address: string;
+    mls_id?: string;
+    source?: string;
+    presentationMode?: "consumer" | "pro";
+  }): Promise<GenerateBriefResponse> {
+    const jsonBody: Record<string, unknown> = { address: params.address };
+    if (params.mls_id !== undefined) jsonBody.mls_id = params.mls_id;
+    if (params.source !== undefined) jsonBody.source = params.source;
+    if (params.presentationMode !== undefined) {
+      jsonBody.presentationMode = params.presentationMode;
+    }
+    const { body } = await brokerageFetch<GenerateBriefResponse>(
+      "/api/brokerage/v1/brief",
+      { method: "POST", jsonBody, timeoutMs: 120_000 },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/brokerage/v1/brief/:runId
+   *
+   * MCP-first contract — cc-agent-C exposes the read path for stored
+   * brief-run payloads. Until then mock-fetch testable only.
+   */
+  async getBriefRun(params: { runId: string }): Promise<GetBriefRunResponse> {
+    const { body } = await brokerageFetch<GetBriefRunResponse>(
+      `/api/brokerage/v1/brief/${encodeURIComponent(params.runId)}`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  // -----------------------------------------------------------------
+  // Tier 1 Group B — Hydrology and topography (engagement-scoped).
+  // -----------------------------------------------------------------
+
+  /**
+   * POST /api/engagements/:id/site-drainage/refresh
+   */
+  async refreshSiteDrainage(params: {
+    engagementId: string;
+    manualDepthInches?: number;
+    returnPeriodYears?: number;
+    accumulationThreshold?: number;
+    forceRefresh?: boolean;
+    useCotalityForcing?: boolean;
+  }): Promise<SiteDrainageRefreshResponse> {
+    const jsonBody: Record<string, unknown> = {};
+    if (params.manualDepthInches !== undefined) {
+      jsonBody.manualDepthInches = params.manualDepthInches;
+    }
+    if (params.returnPeriodYears !== undefined) {
+      jsonBody.returnPeriodYears = params.returnPeriodYears;
+    }
+    if (params.accumulationThreshold !== undefined) {
+      jsonBody.accumulationThreshold = params.accumulationThreshold;
+    }
+    if (params.forceRefresh !== undefined) jsonBody.forceRefresh = params.forceRefresh;
+    if (params.useCotalityForcing !== undefined) {
+      jsonBody.useCotalityForcing = params.useCotalityForcing;
+    }
+    const { body } = await legacyFetch<SiteDrainageRefreshResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/site-drainage/refresh`,
+      { method: "POST", jsonBody, timeoutMs: 120_000 },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/engagements/:id/site-drainage
+   */
+  async getSiteDrainage(params: {
+    engagementId: string;
+  }): Promise<SiteDrainageReadResponse> {
+    const { body } = await legacyFetch<SiteDrainageReadResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/site-drainage`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/engagements/:id/site-drainage/design-storms
+   */
+  async getSiteDrainageDesignStorms(params: {
+    engagementId: string;
+  }): Promise<SiteDrainageDesignStormsResponse> {
+    const { body } = await legacyFetch<SiteDrainageDesignStormsResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/site-drainage/design-storms`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * POST /api/engagements/:id/site-topography/refresh
+   */
+  async refreshSiteTopography(params: {
+    engagementId: string;
+    contourIntervalMeters?: number;
+    catchmentBufferMeters?: number;
+    demResolutionMeters?: number;
+    forceRefresh?: boolean;
+  }): Promise<SiteTopographyRefreshResponse> {
+    const jsonBody: Record<string, unknown> = {};
+    if (params.contourIntervalMeters !== undefined) {
+      jsonBody.contourIntervalMeters = params.contourIntervalMeters;
+    }
+    if (params.catchmentBufferMeters !== undefined) {
+      jsonBody.catchmentBufferMeters = params.catchmentBufferMeters;
+    }
+    if (params.demResolutionMeters !== undefined) {
+      jsonBody.demResolutionMeters = params.demResolutionMeters;
+    }
+    if (params.forceRefresh !== undefined) jsonBody.forceRefresh = params.forceRefresh;
+    const { body } = await legacyFetch<SiteTopographyRefreshResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/site-topography/refresh`,
+      { method: "POST", jsonBody, timeoutMs: 120_000 },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/engagements/:id/site-topography
+   */
+  async getSiteTopography(params: {
+    engagementId: string;
+  }): Promise<SiteTopographyReadResponse> {
+    const { body } = await legacyFetch<SiteTopographyReadResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/site-topography`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  // -----------------------------------------------------------------
+  // Tier 1 Group C — Encumbrances (brokerage workspace-scoped).
+  // -----------------------------------------------------------------
+
+  /**
+   * GET /api/brokerage/v1/workspaces/encumbrances?workspaceDid=...
+   *
+   * Lists recorded-instrument and restriction-clause atoms for a workspace.
+   */
+  async searchEncumbrances(params: {
+    workspaceDid: string;
+  }): Promise<EncumbrancesListResponse> {
+    const qs = new URLSearchParams();
+    qs.set("workspaceDid", params.workspaceDid);
+    const { body } = await brokerageFetch<EncumbrancesListResponse>(
+      `/api/brokerage/v1/workspaces/encumbrances?${qs.toString()}`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/brokerage/v1/workspaces/encumbrances?workspaceDid=...
+   *
+   * Same upstream route as searchEncumbrances; the MCP tool layer projects
+   * restriction-clause atoms for agent consumption.
+   */
+  async getRestrictions(params: {
+    workspaceDid: string;
+  }): Promise<EncumbrancesListResponse> {
+    return this.searchEncumbrances(params);
+  },
+
+  // -----------------------------------------------------------------
+  // Tier 1 Group D — Cotality data tier (designed, inert until creds).
+  // MCP-first contract — cc-agent-C exposes adapter routes.
+  // -----------------------------------------------------------------
+
+  cotalityCredentialsConfigured,
+
+  credentialPending(adapter: CotalityAdapterKey): CredentialPendingResponse {
+    return {
+      status: "credential-pending",
+      adapter,
+      message:
+        "CoreLogic/Cotality OAuth credentials are not configured on this deployment. " +
+        "Operator must activate the client identifier before this adapter can return data.",
+    };
+  },
+
+  async fetchCotalityAdapter(params: {
+    adapter: CotalityAdapterKey;
+    address?: string;
+    lat?: number;
+    lng?: number;
+  }): Promise<Record<string, unknown> | CredentialPendingResponse> {
+    if (!cotalityCredentialsConfigured()) {
+      return this.credentialPending(params.adapter);
+    }
+    const jsonBody: Record<string, unknown> = {};
+    if (params.address !== undefined) jsonBody.address = params.address;
+    if (params.lat !== undefined) jsonBody.lat = params.lat;
+    if (params.lng !== undefined) jsonBody.lng = params.lng;
+    const { body } = await brokerageFetch<Record<string, unknown>>(
+      COTALITY_ADAPTER_ROUTES[params.adapter],
+      { method: "POST", jsonBody },
+    );
+    return body;
+  },
+
+  async getPropertyDetail(params: {
+    address?: string;
+    lat?: number;
+    lng?: number;
+  }): Promise<Record<string, unknown> | CredentialPendingResponse> {
+    return this.fetchCotalityAdapter({
+      adapter: "cotality:property",
+      ...params,
+    });
+  },
+
+  async getReplacementCost(params: {
+    address?: string;
+    lat?: number;
+    lng?: number;
+  }): Promise<Record<string, unknown> | CredentialPendingResponse> {
+    return this.fetchCotalityAdapter({
+      adapter: "cotality:replacementCost",
+      ...params,
+    });
+  },
+
+  async getHazardProfile(params: {
+    address?: string;
+    lat?: number;
+    lng?: number;
+  }): Promise<Record<string, unknown> | CredentialPendingResponse> {
+    return this.fetchCotalityAdapter({
+      adapter: "cotality:hazards",
+      ...params,
+    });
+  },
+
+  async getParcelPolygon(params: {
+    address?: string;
+    lat?: number;
+    lng?: number;
+  }): Promise<Record<string, unknown> | CredentialPendingResponse> {
+    return this.fetchCotalityAdapter({
+      adapter: "cotality:parcels",
+      ...params,
+    });
   },
 };

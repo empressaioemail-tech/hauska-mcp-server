@@ -72,4 +72,52 @@ export const TOOL_COPY = {
   list_workspace_share_edges:
     "List consent-aware share edges for a workspace (default: consent-visible only). Owner/collaborator access required. " +
     BROKERAGE_TIER,
+
+  generate_property_brief:
+    "Generate a Property Brief for an address: reasoning summary, lay summary, site-context layers, and cited code atoms. " +
+    "Returns a brief-run atom (did:hauska:brief-run:<runId>). Layer 2 keystone — requires cortex product key. " +
+    CORTEX_TIER,
+
+  get_property_brief_run:
+    "Fetch a stored Property Brief run by runId. Read companion to generate_property_brief. " +
+    CORTEX_TIER,
+
+  simulate_site_drainage:
+    "Run site-drainage simulation for an engagement (D8 flow routing + rainfall forcing). " +
+    "Engagement-scoped — requires engagement_id. Returns site-drainage ingest status. " +
+    CORTEX_TIER,
+
+  get_site_drainage:
+    "Read the active site-drainage atom for an engagement. Optionally include NOAA Atlas 14 design-storm estimates. " +
+    CORTEX_TIER,
+
+  get_site_topography:
+    "Read site-topography for an engagement (DEM, contours). Set refresh=true to trigger ingest first. " +
+    CORTEX_TIER,
+
+  search_encumbrances:
+    "List recorded-instrument and restriction-clause atoms uploaded to a property workspace. " +
+    "Workspace-scoped via workspace_did. " +
+    CORTEX_TIER,
+
+  get_restrictions:
+    "Fetch restriction-clause atoms for a property workspace (ADR-020/021). Workspace-scoped via workspace_did. " +
+    CORTEX_TIER,
+
+  get_property_detail:
+    "Cotality property-characteristics adapter (DESIGNED, INERT until CoreLogic OAuth clears). " +
+    "Returns credential-pending when credentials are absent — never fake data. " +
+    CORTEX_TIER,
+
+  get_replacement_cost:
+    "Cotality replacement-cost adapter (DESIGNED, INERT until CoreLogic OAuth clears). " +
+    CORTEX_TIER,
+
+  get_hazard_profile:
+    "Cotality hazard/climate adapter (DESIGNED, INERT until CoreLogic OAuth clears). " +
+    CORTEX_TIER,
+
+  get_parcel_polygon:
+    "Cotality parcel-polygon adapter (DESIGNED, INERT until CoreLogic OAuth clears). " +
+    CORTEX_TIER,
 } as const;
