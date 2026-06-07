@@ -1,0 +1,30 @@
+{
+  "displayName": "Hauska platform observability test alert",
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "always-true test condition (operator verification)",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"hauska-mcp-server\" AND metric.type=\"run.googleapis.com/request_count\"",
+        "aggregations": [
+          {
+            "alignmentPeriod": "60s",
+            "perSeriesAligner": "ALIGN_RATE"
+          }
+        ],
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": -1,
+        "duration": "0s",
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ],
+  "notificationChannels": ["__NOTIFICATION_CHANNEL__"],
+  "documentation": {
+    "content": "One-shot test alert for the 76e platform observability sprint. Delete after operator confirms receipt.",
+    "mimeType": "text/markdown"
+  },
+  "enabled": true
+}

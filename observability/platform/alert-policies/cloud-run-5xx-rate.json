@@ -1,0 +1,47 @@
+{
+  "displayName": "Hauska Cloud Run 5xx rate > 2% (mcp + retrieval)",
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "hauska-mcp-server 5xx ratio above 2% for 5m",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"__MCP_SERVICE__\" AND metric.type=\"run.googleapis.com/request_count\" AND metric.labels.response_code_class=\"5xx\"",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_RATE"
+          }
+        ],
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0.02,
+        "duration": "300s",
+        "trigger": {
+          "count": 1
+        }
+      }
+    },
+    {
+      "displayName": "hauska-retrieval-api 5xx ratio above 2% for 5m",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"__RETRIEVAL_SERVICE__\" AND metric.type=\"run.googleapis.com/request_count\" AND metric.labels.response_code_class=\"5xx\"",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_RATE"
+          }
+        ],
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0.02,
+        "duration": "300s",
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ],
+  "notificationChannels": ["__NOTIFICATION_CHANNEL__"],
+  "documentation": {
+    "content": "Cloud Run 5xx request rate exceeded 2% over a 5-minute window for hauska-mcp-server or hauska-retrieval-api. Alert-only; no auto-remediation.",
+    "mimeType": "text/markdown"
+  }
+}

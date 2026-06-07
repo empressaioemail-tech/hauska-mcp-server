@@ -1,0 +1,32 @@
+{
+  "displayName": "Hauska stale-revision traffic drift (mcp + retrieval)",
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "hauska-mcp-server request count drop to zero for 15m (possible stale revision or outage)",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"__MCP_SERVICE__\" AND metric.type=\"run.googleapis.com/request_count\"",
+        "aggregations": [
+          {
+            "alignmentPeriod": "900s",
+            "perSeriesAligner": "ALIGN_RATE"
+          }
+        ],
+        "comparison": "COMPARISON_LT",
+        "thresholdValue": 0.0001,
+        "duration": "900s",
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ],
+  "notificationChannels": ["__NOTIFICATION_CHANNEL__"],
+  "documentation": {
+    "content": "Traffic anomaly on hauska-mcp-server — verify revision/traffic split with `gcloud run services describe`. Alert-only; operator decides rollback. v1 proxy for stale-revision drift until MQL revision metadata is validated.",
+    "mimeType": "text/markdown"
+  },
+  "alertStrategy": {
+    "autoClose": "604800s"
+  }
+}

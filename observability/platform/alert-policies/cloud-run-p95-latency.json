@@ -1,0 +1,51 @@
+{
+  "displayName": "Hauska Cloud Run p95 latency > 3s (mcp + retrieval)",
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "hauska-mcp-server p95 latency above 3000ms for 5m",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"__MCP_SERVICE__\" AND metric.type=\"run.googleapis.com/request_latencies\"",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_DELTA",
+            "crossSeriesReducer": "REDUCE_PERCENTILE_95",
+            "groupByFields": ["resource.label.service_name"]
+          }
+        ],
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 3000,
+        "duration": "300s",
+        "trigger": {
+          "count": 1
+        }
+      }
+    },
+    {
+      "displayName": "hauska-retrieval-api p95 latency above 3000ms for 5m",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"__RETRIEVAL_SERVICE__\" AND metric.type=\"run.googleapis.com/request_latencies\"",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_DELTA",
+            "crossSeriesReducer": "REDUCE_PERCENTILE_95",
+            "groupByFields": ["resource.label.service_name"]
+          }
+        ],
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 3000,
+        "duration": "300s",
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ],
+  "notificationChannels": ["__NOTIFICATION_CHANNEL__"],
+  "documentation": {
+    "content": "Cloud Run p95 request latency exceeded 3000ms over a 5-minute window. v1 default threshold; tune after first week of traffic.",
+    "mimeType": "text/markdown"
+  }
+}

@@ -15,6 +15,8 @@ import type { NextFunction, Request, Response } from "express";
 import { adminAuthMiddleware, buildAuthMiddleware, type AuthContext } from "./auth.js";
 import { buildAdminRouter } from "./admin.js";
 import { buildHealthReport } from "./health.js";
+import { emitGateProbeSignal, runGateProbe } from "./gate-probe.js";
+import { buildHealthzReportAndEmit } from "./healthz.js";
 import { createLogSink, type LogSinkHandle } from "./log-sink.js";
 import { addLogSink, logger } from "./logger.js";
 import { metrics } from "./metrics.js";
@@ -95,6 +97,47 @@ async function main() {
         version: "0.1.0",
         env: ENV,
         error: "health report failed",
+      });
+    }
+  });
+
+  // Normalized health surface for the platform observability sprint (76e).
+  // Public, no auth. Emits one hauska_health structured log line per check.
+  app.get("/healthz", async (_req, res) => {
+    try {
+      res.json(await buildHealthzReportAndEmit());
+    } catch (err) {
+      logger.error("healthz_report_error", { error: String(err) });
+      res.json({
+        status: "degraded",
+        deps: {
+          retrieval_api: "down",
+          legacy_backend: "down",
+        },
+        revision: process.env.K_REVISION ?? "local",
+        error: "healthz report failed",
+      });
+    }
+  });
+
+  // Gate-availability synthetic probe (76e). Loops back to /mcp on the
+  // same instance so Cloud Scheduler and uptime-adjacent checks avoid
+  // external Streamable-HTTP client quirks. Public read-only; alert-only.
+  app.get("/gate-probe", async (_req, res) => {
+    try {
+      const baseUrl = `http://127.0.0.1:${PORT}`;
+      const result = await runGateProbe({
+        baseUrl,
+        codexProbeKey: process.env.GATE_PROBE_CODEX_KEY,
+      });
+      emitGateProbeSignal(result);
+      res.status(result.status === "ok" ? 200 : 503).json(result);
+    } catch (err) {
+      logger.error("gate_probe_error", { error: String(err) });
+      res.status(503).json({
+        status: "fail",
+        error: "gate probe failed",
+        detail: String(err).slice(0, 200),
       });
     }
   });
@@ -277,6 +320,8 @@ async function main() {
       env: ENV,
       endpoint: "/mcp",
       health: "/health",
+      healthz: "/healthz",
+      gate_probe: "/gate-probe",
       admin: "/admin/keys",
       dev_mode: devMode,
     });
