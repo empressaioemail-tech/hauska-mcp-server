@@ -42,6 +42,21 @@ function productOf(
   if (name.startsWith("codex_")) return "Codex";
   if (name.startsWith("cortex_")) return "Cortex";
   if (
+    name.startsWith("generate_property_brief") ||
+    name.startsWith("get_property_brief_run") ||
+    name.startsWith("simulate_site_drainage") ||
+    name.startsWith("get_site_drainage") ||
+    name.startsWith("get_site_topography") ||
+    name.startsWith("search_encumbrances") ||
+    name.startsWith("get_restrictions") ||
+    name.startsWith("get_replacement_cost") ||
+    name.startsWith("get_hazard_profile") ||
+    name.startsWith("get_parcel_polygon") ||
+    name === "get_property_detail"
+  ) {
+    return "Cortex";
+  }
+  if (
     name.startsWith("resolve_place") ||
     name.startsWith("get_place_") ||
     name.startsWith("list_property_") ||

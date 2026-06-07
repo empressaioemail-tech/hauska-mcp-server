@@ -29,6 +29,12 @@ import type {
   GetPlaceDossierResponse,
   GetPlaceLayersResponse,
   GetPropertyWorkspaceResponse,
+  GenerateBriefResponse,
+  GetBriefRunResponse,
+  EncumbrancesListResponse,
+  SiteDrainageReadResponse,
+  SiteTopographyReadResponse,
+  CredentialPendingResponse,
   ListPropertyWorkspacesResponse,
   ListWorkspaceShareEdgesResponse,
   ResolvePlaceResponse,
@@ -419,4 +425,233 @@ export function getPlaceDossierEnvelope(
   options: BuildEnvelopeOptions,
 ): ToolEnvelope<GetPlaceDossierResponse> {
   return buildEnvelope(response, [], options);
+}
+
+// -----------------------------------------------------------------
+// Tier 1 Property Brief envelope (Group A).
+// -----------------------------------------------------------------
+
+function briefRunProvenanceEntry(
+  runId: string,
+  fetchedAt: string,
+  jurisdictionTenant: string,
+): AtomProvenanceEntry {
+  return {
+    did: `did:hauska:brief-run:${runId}`,
+    entityType: "brief-run",
+    entityId: runId,
+    jurisdictionTenant,
+    contentHash: null,
+    cidNote: CID_NOTE,
+    source: {
+      adapter: "legacy-design-tools",
+      url: `/api/brokerage/v1/brief`,
+      fetchedAt,
+    },
+  };
+}
+
+function provenanceFromBriefInlineRef(
+  ref: { did: string; entityType: string; entityId: string },
+  fetchedAt: string,
+  jurisdictionTenant: string,
+): AtomProvenanceEntry {
+  return {
+    did: ref.did,
+    entityType: ref.entityType,
+    entityId: ref.entityId,
+    jurisdictionTenant,
+    contentHash: null,
+    cidNote: CID_NOTE,
+    source: {
+      adapter: "legacy-design-tools",
+      url: `/api/brokerage/v1/brief`,
+      fetchedAt,
+    },
+  };
+}
+
+export function generateBriefEnvelope(
+  response: GenerateBriefResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<GenerateBriefResponse> {
+  const fetchedAt = response.finishedAt ?? response.startedAt;
+  const jurisdiction = response.jurisdiction ?? "brokerage";
+  const atoms: AtomProvenanceEntry[] = [
+    briefRunProvenanceEntry(response.runId, fetchedAt, jurisdiction),
+  ];
+  for (const ref of response.atoms?.inlineRefs ?? []) {
+    atoms.push(provenanceFromBriefInlineRef(ref, fetchedAt, jurisdiction));
+  }
+  return buildEnvelope(response, atoms, options);
+}
+
+export function getBriefRunEnvelope(
+  response: GetBriefRunResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<GetBriefRunResponse> {
+  return generateBriefEnvelope(response, options);
+}
+
+// -----------------------------------------------------------------
+// Tier 1 site-drainage / site-topography envelopes (Group B).
+// -----------------------------------------------------------------
+
+export function siteDrainageEnvelope(
+  response: SiteDrainageReadResponse,
+  engagementId: string,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<SiteDrainageReadResponse> {
+  const fetchedAt = response.updatedAt ?? response.createdAt ?? new Date().toISOString();
+  const entityId = response.materializableElementId ?? engagementId;
+  const atoms: AtomProvenanceEntry[] =
+    response.status === "ok"
+      ? [
+          {
+            did: `did:hauska:site-drainage:${entityId}`,
+            entityType: "site-drainage",
+            entityId,
+            jurisdictionTenant: "legacy",
+            contentHash: null,
+            cidNote: CID_NOTE,
+            source: {
+              adapter: "legacy-design-tools",
+              url: `/api/engagements/${engagementId}/site-drainage`,
+              fetchedAt,
+            },
+          },
+        ]
+      : [];
+  return buildEnvelope(response, atoms, options);
+}
+
+export function siteTopographyEnvelope(
+  response: SiteTopographyReadResponse,
+  engagementId: string,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<SiteTopographyReadResponse> {
+  const fetchedAt = response.updatedAt ?? response.createdAt ?? new Date().toISOString();
+  const entityId = response.materializableElementId ?? engagementId;
+  const atoms: AtomProvenanceEntry[] =
+    response.status === "ok"
+      ? [
+          {
+            did: `did:hauska:site-topography:${entityId}`,
+            entityType: "site-topography",
+            entityId,
+            jurisdictionTenant: "legacy",
+            contentHash: null,
+            cidNote: CID_NOTE,
+            source: {
+              adapter: "legacy-design-tools",
+              url: `/api/engagements/${engagementId}/site-topography`,
+              fetchedAt,
+            },
+          },
+        ]
+      : [];
+  return buildEnvelope(response, atoms, options);
+}
+
+// -----------------------------------------------------------------
+// Tier 1 encumbrance envelopes (Group C).
+// -----------------------------------------------------------------
+
+export function encumbrancesEnvelope(
+  response: EncumbrancesListResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<EncumbrancesListResponse> {
+  const fetchedAt = new Date().toISOString();
+  const atoms: AtomProvenanceEntry[] = [];
+  for (const row of response.instruments) {
+    const atom = row.instrument as {
+      instrumentDid?: string;
+      entityType?: string;
+    };
+    const did =
+      atom.instrumentDid ??
+      `did:hauska:recorded-instrument:${row.id}`;
+    atoms.push({
+      did,
+      entityType: "recorded-instrument",
+      entityId: row.id,
+      jurisdictionTenant: "brokerage",
+      contentHash: null,
+      cidNote: CID_NOTE,
+      source: {
+        adapter: "legacy-design-tools",
+        url: "/api/brokerage/v1/workspaces/encumbrances",
+        fetchedAt,
+      },
+    });
+  }
+  for (const row of response.clauses) {
+    const clause = row.clause as { clauseDid?: string };
+    const did =
+      clause.clauseDid ?? `did:hauska:restriction-clause:${row.id}`;
+    atoms.push({
+      did,
+      entityType: "restriction-clause",
+      entityId: row.id,
+      jurisdictionTenant: "brokerage",
+      contentHash: null,
+      cidNote: CID_NOTE,
+      source: {
+        adapter: "legacy-design-tools",
+        url: "/api/brokerage/v1/workspaces/encumbrances",
+        fetchedAt,
+      },
+    });
+  }
+  return buildEnvelope(response, atoms, options);
+}
+
+export function restrictionsEnvelope(
+  response: EncumbrancesListResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<{
+  workspaceDid?: string;
+  listingKey?: string;
+  clauses: EncumbrancesListResponse["clauses"];
+  instruments: EncumbrancesListResponse["instruments"];
+}> {
+  const projection = {
+    workspaceDid: response.workspaceDid,
+    listingKey: response.listingKey,
+    clauses: response.clauses,
+    instruments: response.instruments,
+  };
+  const fetchedAt = new Date().toISOString();
+  const atoms: AtomProvenanceEntry[] = response.clauses.map((row) => {
+    const clause = row.clause as { clauseDid?: string };
+    const did = clause.clauseDid ?? `did:hauska:restriction-clause:${row.id}`;
+    return {
+      did,
+      entityType: "restriction-clause",
+      entityId: row.id,
+      jurisdictionTenant: "brokerage",
+      contentHash: null,
+      cidNote: CID_NOTE,
+      source: {
+        adapter: "legacy-design-tools",
+        url: "/api/brokerage/v1/workspaces/encumbrances",
+        fetchedAt,
+      },
+    };
+  });
+  return buildEnvelope(projection, atoms, options);
+}
+
+// -----------------------------------------------------------------
+// Tier 1 Cotality credential-pending envelope (Group D).
+// -----------------------------------------------------------------
+
+export function credentialPendingEnvelope(
+  response: CredentialPendingResponse,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<CredentialPendingResponse> {
+  return buildEnvelope(response, [], {
+    ...options,
+    note: response.message,
+  });
 }
