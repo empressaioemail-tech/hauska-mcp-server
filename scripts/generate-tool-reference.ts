@@ -142,11 +142,23 @@ async function main(): Promise<void> {
   const out: string[] = [
     "# Tool reference",
     "",
-    `The Hauska MCP Server exposes ${tools.length} tools. This page is ` +
+  ];
+  if (tools.length !== 46) {
+    out.push(
+      "> **Deploy note:** Production marketing and the capability matrix describe a " +
+        "**46-tool** deployed surface (11 public catalog + place/workspace, 4 Codex, " +
+        "31 Cortex) per `gtm_public_capability_matrix_v1.yaml` v1.1. This page reflects " +
+        `the merged registry (${tools.length} tools); Tier 1 Layer 2 wraps may be ` +
+        "deploy-pending.",
+      "",
+    );
+  }
+  out.push(
+    `The Hauska MCP Server exposes ${tools.length} tools in the merged registry. This page is ` +
       "generated directly from the server's Zod input schemas, so it is " +
       "always exactly the surface an agent sees on the wire.",
     "",
-  ];
+  );
   for (const [group, list] of Object.entries(groups)) {
     if (list.length === 0) continue;
     out.push(`## ${group} (${list.length})`, "", intro[group] ?? "", "");

@@ -19,6 +19,7 @@ const NAV: Array<[string, string]> = [
   ["index", "Overview"],
   ["tool-reference", "Tool reference"],
   ["capability-matrix", "Capability matrix"],
+  ["data-packages", "Data packages"],
   ["coverage", "Central TX coverage"],
   ["examples", "Example queries"],
   ["quickstart-claude-desktop", "Quickstart: Claude Desktop"],
@@ -123,13 +124,17 @@ const DOCS_HOME = "https://hauska.dev/mcp";
 
 function writeAgentDiscoveryFiles(): void {
   const llms = `# Hauska MCP Server
-> Texas building code MCP + property workspace read API (Central TX pilot for place tools).
+> Texas building code + accessibility-standards MCP + property/site reasoning (Layer 2). Central TX pilot for place tools.
 
 - MCP endpoint: ${MCP_TRANSPORT}
 - Documentation: ${DOCS_HOME}
+- Tool surface: 46 shipped (11 public catalog + place/workspace, 4 Codex, 31 Cortex); gates at call time via X-Hauska-Key
 - ICP: Agent builders shipping construction-tech, permitting, diligence, and civic agents
-- Public catalog: search_atoms, get_atom, list_jurisdictions, query_jurisdiction, search_permit_atoms (no API key)
-- Product reads: resolve_place, get_place_layers, get_place_dossier, property workspace tools (API key)
+- Public catalog (no API key): search_atoms, get_atom, list_jurisdictions, query_jurisdiction, search_permit_atoms
+- Product reads (API key): resolve_place, get_place_layers, get_place_dossier, property workspace tools
+- Data packages: subsurface, hydrology/flood, parcel/property, code/plan-review, environmental (roadmap) — ${DOCS_HOME}/data-packages.html
+- Corpus honesty: ~478 public-free atoms / 2 jurisdictions + federal-accessibility-standards tenant; 32 platform-internal jurisdictions never marketed public
+- Confidence: cited scores are raw LLM emissions; calibration in progress
 - Coverage: ${COVERAGE_API_URL}
 - Support: support@hauska.dev
 - Attribution: Powered by Hauska Engine — hauska.dev (free tier)
@@ -142,6 +147,10 @@ mcp: ${MCP_TRANSPORT}
 llms_txt: https://hauska.dev/llms.txt
 coverage: ${COVERAGE_API_URL}
 capabilities: ${DOCS_HOME}/capability-matrix.html
+data_packages: ${DOCS_HOME}/data-packages.html
+tool_count: 46
+corpus_public_free: ~478 atoms / 2 jurisdictions + federal-accessibility-standards tenant
+corpus_platform_internal: 32 jurisdictions (never marketed public)
 `;
 
   writeFileSync(`${SITE_DIR}/llms.txt`, llms);
