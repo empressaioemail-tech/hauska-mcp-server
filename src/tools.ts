@@ -1310,7 +1310,7 @@ export function registerTools(server: McpServer) {
           codexEnvelope(
             response,
             codexProvenance({
-              atomKind: "finding-generation-run",
+              atomKind: "brief-run",
               rowId: response.generationId,
               jurisdictionTenant: "legacy",
               sourcePath: `/api/engagements/${engagement_id}/briefing/generate`,

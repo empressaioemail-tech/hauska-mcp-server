@@ -118,7 +118,7 @@ async function probeUpstash(): Promise<DepHealth> {
 }
 
 const defaultProbes: ProbeFns = {
-  engine: () => probeHttp(`${engineUrl()}/health`),
+  engine: () => probeHttp(`${engineUrl()}/healthz`),
   cortexApi: () => probeHttp(`${cortexApiUrl()}/api/healthz`),
   postgres: probePostgres,
   upstash: probeUpstash,

@@ -254,6 +254,7 @@ export interface CodexProvenanceParams {
     | "finding-generation-run"
     | "finding-override"
     | "parcel-briefing"
+    | "brief-run"
     | "submission";
   rowId: string;
   jurisdictionTenant: string;

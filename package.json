@@ -11,6 +11,7 @@
     "dev": "tsx watch src/index.ts",
     "lint": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
+    "gate-probe": "tsx scripts/gate-probe.ts",
     "migrate": "tsx scripts/migrate.ts",
     "test:inspector": "npx @modelcontextprotocol/inspector http://localhost:3000/mcp"
   },
