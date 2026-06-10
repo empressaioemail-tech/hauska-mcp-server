@@ -65,6 +65,11 @@ import {
   readSharedWithTenants,
 } from "./access-policy.js";
 import {
+  provenanceEntriesFromFindings,
+  type FindingWire,
+} from "./codex-citation-lineage.js";
+import { assertSubmissionPartitionReadable } from "./codex-submission-tenant.js";
+import {
   getCurrentAccessSubject,
   getCurrentAuthContext,
   getCurrentProduct,
@@ -72,6 +77,18 @@ import {
 } from "./request-context.js";
 
 const ATOM_DID_REGEX = /^did:hauska:[a-z-]+:[^\s]+$/;
+
+const FINDING_CITATION_SCHEMA = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("code-section"),
+    atomId: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("briefing-source"),
+    id: z.string().min(1),
+    label: z.string().min(1),
+  }),
+]);
 
 const CODE_ENTITY_TYPES = [
   "code-section",
@@ -921,6 +938,117 @@ export function registerTools(server: McpServer) {
   );
 
   // -----------------------------------------------------------------
+  // Codex tool 1b: codex_findings_fetch (P0a citation lineage)
+  // Returns persisted findings with citations[].atomId verbatim plus
+  // optional generation status (rail-quiet: no calibration grade fields).
+  // Tenant-scoped via ADR-005 Layer A (#29).
+  // -----------------------------------------------------------------
+  server.tool(
+    "codex_findings_fetch",
+    "Codex (plan review): fetch findings for a submission after generation. " +
+      "Returns data.findings[].citations with atom ids as stored on the server, " +
+      "plus envelope atoms for cited code-section DIDs. Optionally includes " +
+      "generation status (generationId, state, timestamps) without calibration " +
+      "grade fields. Chain after codex_finding_generation when polling for " +
+      "completed findings with citation lineage. " + CODEX_TIER,
+    {
+      submission_id: z
+        .string()
+        .uuid()
+        .describe("UUID of the submission to list findings for. Required."),
+      include_status: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe(
+          "When true (default), include rail-quiet generation status alongside findings.",
+        ),
+    },
+    async ({ submission_id, include_status }) => {
+      const gate = requireProduct("codex_findings_fetch", "codex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      try {
+        let submissionTenant: string | undefined;
+        let statusPublic:
+          | {
+              generationId: string | null;
+              state: string;
+              startedAt: string | null;
+              completedAt: string | null;
+              error: string | null;
+            }
+          | undefined;
+
+        if (include_status) {
+          const statusRaw = await legacyClient.getFindingGenerationStatus({
+            submissionId: submission_id,
+          });
+          submissionTenant = statusRaw.jurisdictionTenant;
+          statusPublic = {
+            generationId: statusRaw.generationId,
+            state: statusRaw.state,
+            startedAt: statusRaw.startedAt,
+            completedAt: statusRaw.completedAt,
+            error: statusRaw.error,
+          };
+        }
+
+        const findingsResponse = await legacyClient.fetchSubmissionFindings({
+          submissionId: submission_id,
+        });
+        submissionTenant =
+          submissionTenant ?? findingsResponse.jurisdictionTenant;
+
+        const partition = assertSubmissionPartitionReadable(
+          subject,
+          submissionTenant,
+          "codex_findings_fetch",
+        );
+        if (!partition.ok) {
+          return errorContent(partition.message);
+        }
+
+        const findings = findingsResponse.findings as FindingWire[];
+        const citationAtomCount = findings.reduce(
+          (n, f) =>
+            n +
+            (f.citations?.filter((c) => c.kind === "code-section").length ?? 0),
+          0,
+        );
+        const atoms = provenanceEntriesFromFindings(
+          findings,
+          submission_id,
+          partition.submissionTenant,
+        );
+
+        logToolInvocation({
+          tool: "codex_findings_fetch",
+          submission_id,
+          tier,
+          finding_count: findings.length,
+          citation_atom_count: citationAtomCount,
+          submission_tenant: partition.submissionTenant,
+        });
+
+        const data: Record<string, unknown> = { findings };
+        if (include_status && statusPublic) {
+          data.status = statusPublic;
+        }
+
+        return envelopeContent(
+          codexEnvelope(data, atoms, { tier }),
+        );
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("codex_findings_fetch", err),
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
   // Codex tool 2: codex_override_write
   // Writes a reviewer-authored revision finding against an existing
   // finding atom. Wraps POST /api/findings/:findingId/override.
@@ -934,8 +1062,9 @@ export function registerTools(server: McpServer) {
     "Codex (plan review): write a reviewer-authored override revision against an existing " +
       "finding. Pass the finding atom id plus the new text, severity (blocker / concern / advisory), " +
       "category (setback / height / coverage / egress / use / overlay-conflict / divergence-related / " +
-      "other), and an optional reviewer comment. A finding can be overridden ONCE; a second override " +
-      "returns a 409 conflict. " + CODEX_TIER,
+      "other), optional citations[] (code-section atomId or briefing-source id/label), and an optional " +
+      "reviewer comment. A finding can be overridden ONCE; a second override returns a 409 conflict. " +
+      CODEX_TIER,
     {
       finding_id: z
         .string()
@@ -969,8 +1098,14 @@ export function registerTools(server: McpServer) {
         .describe(
           "Optional reviewer comment captured alongside the override. Surfaces in the audit chain.",
         ),
+      citations: z
+        .array(FINDING_CITATION_SCHEMA)
+        .optional()
+        .describe(
+          "Citation lineage to preserve on the override revision. Code-section entries carry atomId verbatim; briefing-source entries carry id and label.",
+        ),
     },
-    async ({ finding_id, text, severity, category, reviewer_comment }) => {
+    async ({ finding_id, text, severity, category, reviewer_comment, citations }) => {
       const gate = requireProduct("codex_override_write", "codex");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
@@ -981,23 +1116,36 @@ export function registerTools(server: McpServer) {
           severity,
           category,
           reviewerComment: reviewer_comment,
+          citations,
         });
+        const overrideFinding = response.finding as FindingWire | undefined;
+        const overrideAtoms =
+          overrideFinding && Array.isArray(overrideFinding.citations)
+            ? provenanceEntriesFromFindings(
+                [overrideFinding],
+                String(overrideFinding.submissionId ?? "unknown"),
+                getCurrentAccessSubject().jurisdictionTenant ?? "legacy",
+              )
+            : [];
         logToolInvocation({
           tool: "codex_override_write",
           finding_id,
           severity,
           category,
           tier,
+          citation_count: citations?.length ?? 0,
         });
         return envelopeContent(
           codexEnvelope(
             response,
-            codexProvenance({
-              atomKind: "finding-override",
-              rowId: finding_id,
-              jurisdictionTenant: "legacy",
-              sourcePath: `/api/findings/${finding_id}/override`,
-            }),
+            overrideAtoms.length > 0
+              ? overrideAtoms
+              : codexProvenance({
+                  atomKind: "finding-override",
+                  rowId: finding_id,
+                  jurisdictionTenant: "legacy",
+                  sourcePath: `/api/findings/${finding_id}/override`,
+                }),
             { tier },
           ),
         );

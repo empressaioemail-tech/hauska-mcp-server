@@ -6,6 +6,8 @@
 //
 // Codex (Group 1):
 //   POST /api/submissions/:submissionId/findings/generate
+//   GET  /api/submissions/:submissionId/findings/status
+//   GET  /api/submissions/:submissionId/findings
 //   POST /api/findings/:findingId/override
 //   GET  /api/engagements/:id/briefing
 //   POST /api/engagements/:id/submissions
@@ -82,6 +84,37 @@ export type FindingCategory =
   | "overlay-conflict"
   | "divergence-related"
   | "other";
+
+export type FindingCitationWire =
+  | { kind: "code-section"; atomId: string }
+  | { kind: "briefing-source"; id: string; label: string };
+
+export interface FindingWireRow {
+  id: string;
+  submissionId: string;
+  severity: FindingSeverity;
+  category: FindingCategory | string;
+  status: string;
+  text: string;
+  citations: FindingCitationWire[];
+  [key: string]: unknown;
+}
+
+export interface FetchSubmissionFindingsResponse {
+  findings: FindingWireRow[];
+  /** Partition key for ADR-005 gate scoping when surfaced by cortex-api. */
+  jurisdictionTenant?: string;
+}
+
+export interface FindingGenerationStatusResponse {
+  generationId: string | null;
+  state: FindingGenerationState | "idle";
+  startedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
+  /** Partition key for ADR-005 gate scoping when surfaced by cortex-api. */
+  jurisdictionTenant?: string;
+}
 
 export interface OverrideFindingResponse {
   // The legacy backend returns the full finding wire row under
@@ -1112,18 +1145,67 @@ export const legacyClient = {
     severity: FindingSeverity;
     category: FindingCategory;
     reviewerComment?: string;
+    citations?: FindingCitationWire[];
   }): Promise<OverrideFindingResponse> {
+    const jsonBody: Record<string, unknown> = {
+      text: params.text,
+      severity: params.severity,
+      category: params.category,
+      reviewerComment: params.reviewerComment ?? "",
+    };
+    if (params.citations !== undefined) {
+      jsonBody.citations = params.citations;
+    }
     const { body } = await legacyFetch<OverrideFindingResponse>(
       `/api/findings/${encodeURIComponent(params.findingId)}/override`,
       {
         method: "POST",
-        jsonBody: {
-          text: params.text,
-          severity: params.severity,
-          category: params.category,
-          reviewerComment: params.reviewerComment ?? "",
-        },
+        jsonBody,
       },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/submissions/:submissionId/findings/status
+   *
+   * Reads the most recent finding-generation run for the submission.
+   * Calibration fields (`invalidCitationCount`, `invalidCitations`,
+   * `discardedFindingCount`) are consumed internally by the gate but
+   * stripped from tool output (rail-quiet I7).
+   */
+  async getFindingGenerationStatus(params: {
+    submissionId: string;
+  }): Promise<FindingGenerationStatusResponse & {
+    invalidCitationCount?: number | null;
+    invalidCitations?: string[] | null;
+    discardedFindingCount?: number | null;
+  }> {
+    const { body } = await legacyFetch<
+      FindingGenerationStatusResponse & {
+        invalidCitationCount?: number | null;
+        invalidCitations?: string[] | null;
+        discardedFindingCount?: number | null;
+      }
+    >(
+      `/api/submissions/${encodeURIComponent(params.submissionId)}/findings/status`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/submissions/:submissionId/findings
+   *
+   * Lists findings for a submission (newest first at the wire layer).
+   * Citations carry canonical atom ids as stored post-P0b (#158).
+   */
+  async fetchSubmissionFindings(params: {
+    submissionId: string;
+  }): Promise<FetchSubmissionFindingsResponse> {
+    const { body } = await legacyFetch<FetchSubmissionFindingsResponse>(
+      `/api/submissions/${encodeURIComponent(params.submissionId)}/findings`,
+      { method: "GET" },
     );
     return body;
   },
