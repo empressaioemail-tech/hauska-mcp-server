@@ -37,6 +37,41 @@
 // Run cutover.
 
 import { logger } from "./logger.js";
+import { getCurrentAuthContext } from "./request-context.js";
+
+/** ADR-008 / PR #160 gate-front seam headers forwarded to cortex-api engine routes. */
+const GATE_JURISDICTION_TENANT_HEADER = "X-Hauska-Jurisdiction-Tenant";
+const GATE_PLATFORM_INTERNAL_HEADER = "X-Hauska-Platform-Internal";
+
+function gateFrontScopeHeaders(): Record<string, string> {
+  const auth = getCurrentAuthContext();
+  if (!auth) return {};
+  const headers: Record<string, string> = {};
+  const tenant = auth.jurisdiction_tenant?.trim();
+  if (tenant) {
+    headers[GATE_JURISDICTION_TENANT_HEADER] = tenant;
+  }
+  if (auth.platform_internal) {
+    headers[GATE_PLATFORM_INTERNAL_HEADER] = "true";
+  }
+  return headers;
+}
+
+/** True when `path` targets a cortex-api engine entry behind the #160 gate-front seam. */
+function isGateFrontEnginePath(path: string): boolean {
+  const pathname = path.split("?")[0] ?? path;
+  if (pathname.startsWith("/api/brokerage/v1/brief")) return true;
+  if (pathname.startsWith("/api/brokerage/v1/place/")) return true;
+  if (pathname.startsWith("/api/brokerage/v1/workspaces/encumbrances")) {
+    return true;
+  }
+  if (/^\/api\/engagements\/[^/]+\/site-drainage/.test(pathname)) return true;
+  if (/^\/api\/engagements\/[^/]+\/site-topography/.test(pathname)) return true;
+  if (/^\/api\/engagements\/[^/]+\/encumbrances/.test(pathname)) return true;
+  if (/^\/api\/submissions\/[^/]+\/findings/.test(pathname)) return true;
+  if (/^\/api\/findings\/[^/]+\/override/.test(pathname)) return true;
+  return false;
+}
 
 const DEFAULT_BACKEND_URL = "http://localhost:5000";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -717,6 +752,7 @@ async function legacyFetch<T>(
   const headers: Record<string, string> = {
     accept: "application/json",
     "user-agent": "hauska-mcp-server/0.1",
+    ...(isGateFrontEnginePath(path) ? gateFrontScopeHeaders() : {}),
     ...(init?.headers as Record<string, string> | undefined),
   };
   const apiKey = legacyApiKey();
