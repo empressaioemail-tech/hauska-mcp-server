@@ -20,6 +20,8 @@ export interface ApiKeyRow {
   key_hash: string;
   tier: Tier;
   product: Product;
+  jurisdiction_tenant: string | null;
+  platform_internal: boolean;
   owner_email: string;
   owner_name: string | null;
   created_at: Date;
@@ -33,6 +35,8 @@ export interface ApiKeyPublic {
   key_id: string;
   tier: Tier;
   product: Product;
+  jurisdiction_tenant: string | null;
+  platform_internal: boolean;
   owner_email: string;
   owner_name: string | null;
   created_at: string;
@@ -70,6 +74,8 @@ function rowToPublic(row: ApiKeyRow): ApiKeyPublic {
     key_id: row.key_id,
     tier: row.tier,
     product: row.product,
+    jurisdiction_tenant: row.jurisdiction_tenant,
+    platform_internal: row.platform_internal,
     owner_email: row.owner_email,
     owner_name: row.owner_name,
     created_at: row.created_at.toISOString(),
@@ -91,11 +97,16 @@ function castRow(raw: Record<string, unknown>): ApiKeyRow {
     typeof productRaw === "string" && isProduct(productRaw)
       ? productRaw
       : "public";
+  const jurisdictionTenantRaw = raw.jurisdiction_tenant;
+  const platformInternalRaw = raw.platform_internal;
   return {
     key_id: raw.key_id as string,
     key_hash: raw.key_hash as string,
     tier,
     product,
+    jurisdiction_tenant:
+      typeof jurisdictionTenantRaw === "string" ? jurisdictionTenantRaw : null,
+    platform_internal: platformInternalRaw === true,
     owner_email: raw.owner_email as string,
     owner_name: (raw.owner_name as string | null) ?? null,
     created_at: raw.created_at as Date,
@@ -106,26 +117,30 @@ function castRow(raw: Record<string, unknown>): ApiKeyRow {
 }
 
 const SELECT_COLS =
-  "key_id, key_hash, tier, product, owner_email, owner_name, created_at, last_used_at, status, notes";
+  "key_id, key_hash, tier, product, jurisdiction_tenant, platform_internal, owner_email, owner_name, created_at, last_used_at, status, notes";
 
 export async function insertKey(params: {
   key_hash: string;
   tier: Tier;
   product: Product;
+  jurisdiction_tenant?: string | null;
+  platform_internal?: boolean;
   owner_email: string;
   owner_name?: string | null;
   notes?: string | null;
 }): Promise<ApiKeyPublic> {
   const keyId = randomUUID();
   const result = await getPool().query<Record<string, unknown>>(
-    `INSERT INTO api_keys (key_id, key_hash, tier, product, owner_email, owner_name, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO api_keys (key_id, key_hash, tier, product, jurisdiction_tenant, platform_internal, owner_email, owner_name, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING ${SELECT_COLS}`,
     [
       keyId,
       params.key_hash,
       params.tier,
       params.product,
+      params.jurisdiction_tenant ?? null,
+      params.platform_internal ?? false,
       params.owner_email,
       params.owner_name ?? null,
       params.notes ?? null,
@@ -165,6 +180,8 @@ export async function updateKey(
   patch: {
     tier?: Tier;
     product?: Product;
+    jurisdiction_tenant?: string | null;
+    platform_internal?: boolean;
     status?: KeyStatus;
     notes?: string | null;
   },
@@ -179,6 +196,14 @@ export async function updateKey(
   if (patch.product !== undefined) {
     sets.push(`product = $${i++}`);
     values.push(patch.product);
+  }
+  if (patch.jurisdiction_tenant !== undefined) {
+    sets.push(`jurisdiction_tenant = $${i++}`);
+    values.push(patch.jurisdiction_tenant);
+  }
+  if (patch.platform_internal !== undefined) {
+    sets.push(`platform_internal = $${i++}`);
+    values.push(patch.platform_internal);
   }
   if (patch.status !== undefined) {
     sets.push(`status = $${i++}`);

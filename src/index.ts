@@ -200,9 +200,18 @@ async function main() {
         | undefined)?.trim();
       const product: Product =
         headerRaw && isProduct(headerRaw) ? headerRaw : "public";
+      const tenantRaw = (req.headers["x-hauska-dev-tenant"] as
+        | string
+        | undefined)?.trim();
+      const platformInternal =
+        (req.headers["x-hauska-dev-platform-internal"] as string | undefined)
+          ?.trim()
+          .toLowerCase() === "true";
       req.hauska = {
         tier: "free_anonymous",
         product,
+        jurisdiction_tenant: tenantRaw && tenantRaw.length > 0 ? tenantRaw : null,
+        platform_internal: platformInternal,
         rate_limit_id: `dev:${req.ip ?? "unknown"}`,
         remaining_rpm: -1,
         remaining_daily: -1,

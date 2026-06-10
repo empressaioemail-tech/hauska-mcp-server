@@ -37,6 +37,8 @@ const CreateBody = z.object({
   // Default 'public' so existing operator scripts that mint substrate
   // keys without specifying product keep working unchanged.
   product: PRODUCT_ENUM.default("public"),
+  jurisdiction_tenant: z.string().min(1).max(200).nullable().optional(),
+  platform_internal: z.boolean().optional().default(false),
   owner_email: z.string().email(),
   owner_name: z.string().min(1).max(200).optional(),
   notes: z.string().max(2000).optional(),
@@ -46,6 +48,8 @@ const PatchBody = z
   .object({
     tier: TIER_ENUM.optional(),
     product: PRODUCT_ENUM.optional(),
+    jurisdiction_tenant: z.string().min(1).max(200).nullable().optional(),
+    platform_internal: z.boolean().optional(),
     status: STATUS_ENUM.optional(),
     notes: z.string().max(2000).nullable().optional(),
   })
@@ -53,9 +57,11 @@ const PatchBody = z
     (v) =>
       v.tier !== undefined ||
       v.product !== undefined ||
+      v.jurisdiction_tenant !== undefined ||
+      v.platform_internal !== undefined ||
       v.status !== undefined ||
       v.notes !== undefined,
-    "At least one of tier, product, status, notes must be provided.",
+    "At least one of tier, product, jurisdiction_tenant, platform_internal, status, notes must be provided.",
   );
 
 export function buildAdminRouter(): Router {
@@ -74,6 +80,8 @@ export function buildAdminRouter(): Router {
         key_hash: generated.hash,
         tier: parsed.data.tier,
         product: parsed.data.product,
+        jurisdiction_tenant: parsed.data.jurisdiction_tenant ?? null,
+        platform_internal: parsed.data.platform_internal,
         owner_email: parsed.data.owner_email,
         owner_name: parsed.data.owner_name ?? null,
         notes: parsed.data.notes ?? null,

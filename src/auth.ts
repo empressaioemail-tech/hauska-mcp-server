@@ -31,6 +31,12 @@ export interface AuthContext {
   // implicitly 'public'; codex / cortex products are reachable only via
   // a key bound to that product per migration 002.
   product: Product;
+  // ADR-005 Layer A: jurisdiction tenant resolved from the api-keys row.
+  // Absent for anonymous callers and keys minted without a tenant binding.
+  jurisdiction_tenant?: string | null;
+  // Hauska/Empressa operator keys bypass tenant-private and may read
+  // platform-internal atoms.
+  platform_internal?: boolean;
   // Present only for authenticated requests.
   key_id?: string;
   key_hash?: string;
@@ -152,6 +158,8 @@ export function buildAuthMiddleware(store: RateLimitStore) {
       req.hauska = {
         tier: row.tier,
         product: row.product,
+        jurisdiction_tenant: row.jurisdiction_tenant,
+        platform_internal: row.platform_internal,
         key_id: row.key_id,
         key_hash: row.key_hash,
         rate_limit_id: identifier,

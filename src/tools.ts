@@ -58,6 +58,14 @@ import {
 import { logger } from "./logger.js";
 import type { Product } from "./products.js";
 import {
+  canReadAccessTarget,
+  effectiveAccessPolicy,
+  filterByAccessPolicy,
+  logAccessDenied,
+  readSharedWithTenants,
+} from "./access-policy.js";
+import {
+  getCurrentAccessSubject,
   getCurrentAuthContext,
   getCurrentProduct,
   getCurrentTier,
@@ -163,6 +171,38 @@ export function accessPoliciesForTier(
   return tier === "free_anonymous" ? ["public-free"] : undefined;
 }
 
+function atomInstanceAccessTarget(
+  atom: Record<string, unknown> & { jurisdictionTenant: string },
+) {
+  const accessPolicy =
+    typeof atom.accessPolicy === "string"
+      ? (atom.accessPolicy as AccessPolicy)
+      : undefined;
+  return {
+    accessPolicy,
+    jurisdictionTenant: atom.jurisdictionTenant,
+    sharedWithTenants: readSharedWithTenants(atom),
+  };
+}
+
+function assertAtomReadable(
+  tool: string,
+  atom: Record<string, unknown> & { jurisdictionTenant: string },
+): boolean {
+  const subject = getCurrentAccessSubject();
+  const target = atomInstanceAccessTarget(atom);
+  if (canReadAccessTarget(subject, target)) return true;
+  logAccessDenied({
+    tool,
+    policy: effectiveAccessPolicy(target),
+    atomJurisdiction: target.jurisdictionTenant,
+    subjectTenant: subject.jurisdictionTenant,
+    platformInternal: subject.platformInternal,
+    reason: "single_atom_read",
+  });
+  return false;
+}
+
 // Product gate. Returns a 4xx-shaped error envelope when the caller's
 // product does not include this tool's product. Mirrors the
 // errorContent() helper so callers see a consistent isError envelope.
@@ -243,15 +283,27 @@ export function registerTools(server: McpServer) {
           entityType: entity_type,
           limit,
         });
+        const subject = getCurrentAccessSubject();
+        const filtered = filterByAccessPolicy(
+          response.results,
+          subject,
+          (r) => ({
+            accessPolicy: r.accessPolicy,
+            jurisdictionTenant: r.jurisdictionTenant,
+          }),
+          { tool: "search_atoms" },
+        );
+        const filteredResponse = { ...response, results: filtered };
         logToolInvocation({
           tool: "search_atoms",
           query,
           jurisdiction,
           entity_type,
           tier,
-          count: response.results.length,
+          count: filtered.length,
+          pre_filter_count: response.results.length,
         });
-        return envelopeContent(searchAtomsEnvelope(response, { tier }));
+        return envelopeContent(searchAtomsEnvelope(filteredResponse, { tier }));
       } catch (err) {
         return errorContent(describeEngineFailure("search_atoms", err));
       }
@@ -302,7 +354,23 @@ export function registerTools(server: McpServer) {
             }),
           );
         }
-        return envelopeContent(getAtomEnvelope(response, { tier }));
+        if (!assertAtomReadable("get_atom", response.atom)) {
+          return envelopeContent(
+            getAtomEnvelope({ atom: null, composition: [] }, {
+              tier,
+              note: `No atom found at DID ${atom_id}.`,
+            }),
+          );
+        }
+        const composition = response.composition?.filter(
+          (edge) => edge.atom && assertAtomReadable("get_atom", edge.atom),
+        );
+        return envelopeContent(
+          getAtomEnvelope(
+            { ...response, composition },
+            { tier },
+          ),
+        );
       } catch (err) {
         return errorContent(describeEngineFailure("get_atom", err));
       }
@@ -354,7 +422,44 @@ export function registerTools(server: McpServer) {
             }),
           );
         }
-        return envelopeContent(queryJurisdictionEnvelope(response, { tier }));
+        const subject = getCurrentAccessSubject();
+        const statusReadable = canReadAccessTarget(subject, {
+          accessPolicy: response.status.accessPolicy,
+          jurisdictionTenant: response.status.jurisdictionTenant,
+        });
+        if (!statusReadable) {
+          logAccessDenied({
+            tool: "query_jurisdiction",
+            policy: effectiveAccessPolicy({
+              accessPolicy: response.status.accessPolicy,
+              jurisdictionTenant: response.status.jurisdictionTenant,
+            }),
+            atomJurisdiction: response.status.jurisdictionTenant,
+            subjectTenant: subject.jurisdictionTenant,
+            platformInternal: subject.platformInternal,
+            reason: "jurisdiction_status",
+          });
+          return envelopeContent(
+            queryJurisdictionEnvelope({ status: null }, {
+              tier,
+              note: `Jurisdiction "${jurisdiction}" is not loaded. Call list_jurisdictions to see available tenants.`,
+            }),
+          );
+        }
+        const permitAtoms = response.permitAtoms
+          ? filterByAccessPolicy(
+              response.permitAtoms,
+              subject,
+              (r) => ({
+                accessPolicy: r.accessPolicy,
+                jurisdictionTenant: r.jurisdictionTenant,
+              }),
+              { tool: "query_jurisdiction" },
+            )
+          : undefined;
+        return envelopeContent(
+          queryJurisdictionEnvelope({ ...response, permitAtoms }, { tier }),
+        );
       } catch (err) {
         return errorContent(describeEngineFailure("query_jurisdiction", err));
       }
@@ -394,14 +499,28 @@ export function registerTools(server: McpServer) {
           jurisdiction,
           projectType: project_type,
         });
+        const subject = getCurrentAccessSubject();
+        const permitAtoms = response.permitAtoms
+          ? filterByAccessPolicy(
+              response.permitAtoms,
+              subject,
+              (r) => ({
+                accessPolicy: r.accessPolicy,
+                jurisdictionTenant: r.jurisdictionTenant,
+              }),
+              { tool: "search_permit_atoms" },
+            )
+          : undefined;
         logToolInvocation({
           tool: "search_permit_atoms",
           jurisdiction,
           project_type,
           tier,
-          count: response.permitAtoms?.length ?? 0,
+          count: permitAtoms?.length ?? 0,
         });
-        return envelopeContent(searchPermitAtomsEnvelope(response, { tier }));
+        return envelopeContent(
+          searchPermitAtomsEnvelope({ ...response, permitAtoms }, { tier }),
+        );
       } catch (err) {
         return errorContent(describeEngineFailure("search_permit_atoms", err));
       }
@@ -438,14 +557,26 @@ export function registerTools(server: McpServer) {
           qualityBarOnly: quality_bar_only,
           ...(accessPolicies !== undefined ? { accessPolicies } : {}),
         });
+        const subject = getCurrentAccessSubject();
+        const jurisdictions = filterByAccessPolicy(
+          response.jurisdictions,
+          subject,
+          (j) => ({
+            accessPolicy: j.accessPolicy,
+            jurisdictionTenant: j.jurisdictionTenant,
+          }),
+          { tool: "list_jurisdictions" },
+        );
         logToolInvocation({
           tool: "list_jurisdictions",
           tier,
-          count: response.jurisdictions.length,
+          count: jurisdictions.length,
           public_filtered: accessPolicies !== undefined,
           quality_bar_only,
         });
-        return envelopeContent(listJurisdictionsEnvelope(response, { tier }));
+        return envelopeContent(
+          listJurisdictionsEnvelope({ jurisdictions }, { tier }),
+        );
       } catch (err) {
         return errorContent(describeEngineFailure("list_jurisdictions", err));
       }
