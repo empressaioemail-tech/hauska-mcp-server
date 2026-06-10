@@ -14,6 +14,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { accessSubjectFromContext } from "./access-policy.js";
 import type { AuthContext } from "./auth.js";
 import type { Product } from "./products.js";
 
@@ -47,4 +48,8 @@ export function getCurrentRequestId(): string | undefined {
 // owner/collaborator access checks on backend read APIs).
 export function getCurrentAuthContext(): AuthContext | undefined {
   return requestContext.getStore();
+}
+
+export function getCurrentAccessSubject() {
+  return accessSubjectFromContext(getCurrentAuthContext());
 }

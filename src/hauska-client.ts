@@ -56,6 +56,8 @@ export interface AtomSearchResult {
   sectionNumber: string | null;
   snippet: string;
   score: number;
+  /** ADR-017 access tier when the engine surfaces it on search rows. */
+  accessPolicy?: AccessPolicy;
 }
 
 export interface SearchResponse {
