@@ -1,14 +1,18 @@
 # Product Hunt draft
 
-**DRAFT — operator gate. Do not submit from agent.**
+**DRAFT — Wave 2 (deferred per channel plan). Do not publish from agent.**
 
 ## Tagline
 
-MCP server for Texas building code + property workspace reads
+Building code + accessibility MCP with cited site reasoning for AI agents
 
-## Description (stub)
+## Description
 
-Hauska MCP gives agents verified code atoms with provenance. Free public catalog;
-API key for place dossier and workspaces in Central TX pilot.
+Hauska MCP gives agents verified code and accessibility atoms with provenance, plus
+Layer 2 data packages that sell cited reasoning over subsurface, hydrology, parcel, and
+code/plan-review domains — not raw federal baselines.
 
-Link: https://hauska.dev/mcp
+Free public catalog; 46-tool deployed surface. Public-free corpus: ~478 atoms / 2
+jurisdictions + federal-accessibility-standards tenant.
+
+https://hauska.dev/mcp

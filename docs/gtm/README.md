@@ -10,4 +10,8 @@ Operator (Nick) publishes per `gtm_launch_channel_plan_v1.yaml`. Agents commit d
 | Show HN | `show_hn_draft.md` |
 | Product Hunt | `producthunt_draft.md` |
 
-Public claim until G3 green: **Texas building code MCP + property workspace read API**.
+Public claim (matrix v1.1): **Texas building code + accessibility-standards MCP + property/site reasoning (Layer 2)**.
+
+Deployed surface: **46 tools** (11 public catalog + place/workspace, 4 Codex, 31 Cortex). The 40-tool figure is superseded.
+
+Data-package framing: [docs/content/data-packages.md](../content/data-packages.md).
