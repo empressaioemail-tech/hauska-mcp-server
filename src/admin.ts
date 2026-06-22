@@ -5,6 +5,11 @@
 // GET    /admin/keys           list all keys (never returns raw key or hash)
 // PATCH  /admin/keys/:key_id   update tier, status, or notes
 // DELETE /admin/keys/:key_id   revoke (soft delete: status -> 'revoked')
+//
+// MCP introspection (operator console, read-only catalog + live probes):
+// GET    /admin/introspection/tools
+// GET    /admin/introspection/tools/:name
+// POST   /admin/introspection/tools/:name/call
 
 import { Router } from "express";
 import { z } from "zod";
@@ -17,6 +22,11 @@ import {
   type KeyStatus,
 } from "./db.js";
 import { generateKey } from "./keys.js";
+import {
+  callIntrospectionTool,
+  getIntrospectionTool,
+  listIntrospectionTools,
+} from "./mcp-introspection.js";
 import { logger } from "./logger.js";
 import { PRODUCTS, type Product } from "./products.js";
 import { TIERS, type Tier } from "./tiers.js";
@@ -145,6 +155,78 @@ export function buildAdminRouter(): Router {
     } catch (err) {
       logger.error("admin_key_revoke_failed", { error: String(err) });
       return res.status(500).json({ error: "Revoke failed." });
+    }
+  });
+
+  const IntrospectionAuth = z
+    .object({
+      product: PRODUCT_ENUM.optional(),
+      tier: z.union([TIER_ENUM, z.literal("free_anonymous")]).optional(),
+      key_id: z.string().min(1).optional(),
+      key_hash: z.string().min(1).optional(),
+      jurisdiction_tenant: z.string().min(1).max(200).nullable().optional(),
+      platform_internal: z.boolean().optional(),
+    })
+    .optional();
+
+  const IntrospectionCallBody = z.object({
+    arguments: z.record(z.unknown()).default({}),
+    auth: IntrospectionAuth,
+  });
+
+  router.get("/introspection/tools", async (_req, res) => {
+    try {
+      const catalog = await listIntrospectionTools();
+      return res.json(catalog);
+    } catch (err) {
+      logger.error("admin_introspection_list_failed", { error: String(err) });
+      return res.status(500).json({ error: "Introspection list failed." });
+    }
+  });
+
+  router.get("/introspection/tools/:name", async (req, res) => {
+    try {
+      const tool = await getIntrospectionTool(req.params.name);
+      if (!tool) {
+        return res.status(404).json({ error: "Tool not found." });
+      }
+      return res.json(tool);
+    } catch (err) {
+      logger.error("admin_introspection_get_failed", {
+        tool: req.params.name,
+        error: String(err),
+      });
+      return res.status(500).json({ error: "Introspection get failed." });
+    }
+  });
+
+  router.post("/introspection/tools/:name/call", async (req, res) => {
+    const parsed = IntrospectionCallBody.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res
+        .status(400)
+        .json({ error: "Invalid body", details: parsed.error.flatten() });
+    }
+    try {
+      const outcome = await callIntrospectionTool(
+        req.params.name,
+        parsed.data.arguments,
+        parsed.data.auth,
+      );
+      logger.info("admin_introspection_call", {
+        tool: req.params.name,
+        product: outcome.auth.product,
+        tier: outcome.auth.tier,
+        latency_ms: outcome.latency_ms,
+        is_error: outcome.is_error,
+      });
+      return res.json(outcome);
+    } catch (err) {
+      logger.error("admin_introspection_call_failed", {
+        tool: req.params.name,
+        error: String(err),
+      });
+      return res.status(500).json({ error: "Introspection call failed." });
     }
   });
 

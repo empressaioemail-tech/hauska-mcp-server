@@ -79,6 +79,13 @@ test("provenanceFromAtom surfaces DID, content hash, source adapter, source URL,
   assert.equal(p.source.fetchedAt, "2026-05-19T10:00:00Z");
 });
 
+test("buildEnvelope attaches readContract on every envelope", () => {
+  const env = buildEnvelope({ ok: true }, [], { tier: "free_anonymous" });
+  assert.ok(env.readContract);
+  assert.equal(typeof env.readContract.assembledAt, "string");
+  assert.equal(typeof env.readContract.axes.calibratedConfidence.n, "number");
+});
+
 test("buildEnvelope attaches attribution for free_anonymous tier", () => {
   const env = buildEnvelope({ x: 1 }, [], { tier: "free_anonymous" });
   assert.equal(env.meta.attribution, ATTRIBUTION_STRING);

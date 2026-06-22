@@ -237,24 +237,24 @@ test("requireProduct denies public key for generate_property_brief", () => {
       remaining_daily: -1,
     },
     () => {
-      const result = requireProduct("generate_property_brief", "cortex");
+      const result = requireProduct("generate_property_brief", "reporting");
       assert.equal(result.ok, false);
     },
   );
 });
 
-test("requireProduct allows cortex key for generate_property_brief", () => {
+test("requireProduct allows reporting key for generate_property_brief", () => {
   withCtx(
     {
       tier: "developer_pro",
-      product: "cortex",
+      product: "reporting",
       key_id: "k-test",
       rate_limit_id: "key:k-test",
       remaining_rpm: 100,
       remaining_daily: 1000,
     },
     () => {
-      const result = requireProduct("generate_property_brief", "cortex");
+      const result = requireProduct("generate_property_brief", "reporting");
       assert.equal(result.ok, true);
     },
   );

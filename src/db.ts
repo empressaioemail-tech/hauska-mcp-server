@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 
 import pg from "pg";
 
-import { isProduct, type Product } from "./products.js";
+import { isProduct, normalizeStoredProduct, type Product } from "./products.js";
 import { isTier, type Tier } from "./tiers.js";
 
 const { Pool } = pg;
@@ -94,8 +94,8 @@ function castRow(raw: Record<string, unknown>): ApiKeyRow {
   // the column-add migration can roll out without coordinated app deploy.
   const productRaw = raw.product;
   const product: Product =
-    typeof productRaw === "string" && isProduct(productRaw)
-      ? productRaw
+    typeof productRaw === "string"
+      ? normalizeStoredProduct(productRaw)
       : "public";
   const jurisdictionTenantRaw = raw.jurisdiction_tenant;
   const platformInternalRaw = raw.platform_internal;
