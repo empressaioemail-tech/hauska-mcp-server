@@ -71,6 +71,7 @@ import {
   placeApiEnabled,
   type GtmErrorClass,
 } from "./gtm-observability.js";
+import { logToolRead } from "./read-attribution.js";
 import { TOOL_COPY, CODEX_TIER, CORTEX_TIER, REPORTING_TIER, MAP_TIER } from "./tool-copy.js";
 import {
   EngineHttpError,
@@ -376,7 +377,7 @@ export function registerTools(server: McpServer) {
         );
         const filteredResponse = { ...response, results: filtered };
         const __readEnv = searchAtomsEnvelope(filteredResponse, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "search_atoms",
           query,
           jurisdiction,
@@ -384,8 +385,7 @@ export function registerTools(server: McpServer) {
           tier,
           count: filtered.length,
           pre_filter_count: response.results.length,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("search_atoms", err));
@@ -427,13 +427,12 @@ export function registerTools(server: McpServer) {
             tier,
             note: `No atom found at DID ${atom_id}.`,
           });
-          logToolInvocation({
+          logToolRead({
             tool: "get_atom",
             atom_id,
             tier,
             found: false,
-            envelope: __readEnv,
-          });
+          }, __readEnv.atoms);
           return envelopeContent(__readEnv);
         }
         if (!assertAtomReadable("get_atom", response.atom)) {
@@ -441,13 +440,12 @@ export function registerTools(server: McpServer) {
             tier,
             note: `No atom found at DID ${atom_id}.`,
           });
-          logToolInvocation({
+          logToolRead({
             tool: "get_atom",
             atom_id,
             tier,
             found: false,
-            envelope: __readEnv,
-          });
+          }, __readEnv.atoms);
           return envelopeContent(__readEnv);
         }
         const composition = response.composition?.filter(
@@ -461,14 +459,13 @@ export function registerTools(server: McpServer) {
           ),
           response.atom.accessPolicy as import("@hauska/atom-contract").AccessPolicy | undefined,
         );
-        logToolInvocation({
+        logToolRead({
           tool: "get_atom",
           atom_id,
           tier,
           found: true,
           composition_count: composition?.length ?? 0,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("get_atom", err));
@@ -512,13 +509,12 @@ export function registerTools(server: McpServer) {
             tier,
             note: `Jurisdiction "${jurisdiction}" is not loaded. Call list_jurisdictions to see available tenants.`,
           });
-          logToolInvocation({
+          logToolRead({
             tool: "query_jurisdiction",
             jurisdiction,
             tier,
             found: false,
-            envelope: __readEnv,
-          });
+          }, __readEnv.atoms);
           return envelopeContent(__readEnv);
         }
         const subject = getCurrentAccessSubject();
@@ -542,13 +538,12 @@ export function registerTools(server: McpServer) {
             tier,
             note: `Jurisdiction "${jurisdiction}" is not loaded. Call list_jurisdictions to see available tenants.`,
           });
-          logToolInvocation({
+          logToolRead({
             tool: "query_jurisdiction",
             jurisdiction,
             tier,
             found: false,
-            envelope: __readEnv,
-          });
+          }, __readEnv.atoms);
           return envelopeContent(__readEnv);
         }
         const permitAtoms = response.permitAtoms
@@ -566,13 +561,12 @@ export function registerTools(server: McpServer) {
           { ...response, permitAtoms },
           { tier },
         );
-        logToolInvocation({
+        logToolRead({
           tool: "query_jurisdiction",
           jurisdiction,
           tier,
           found: true,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("query_jurisdiction", err));
@@ -626,14 +620,13 @@ export function registerTools(server: McpServer) {
             )
           : undefined;
         const __readEnv = searchPermitAtomsEnvelope({ ...response, permitAtoms }, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "search_permit_atoms",
           jurisdiction,
           project_type,
           tier,
           count: permitAtoms?.length ?? 0,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("search_permit_atoms", err));
@@ -682,14 +675,13 @@ export function registerTools(server: McpServer) {
           { tool: "list_jurisdictions" },
         );
         const __readEnv = listJurisdictionsEnvelope({ jurisdictions }, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "list_jurisdictions",
           tier,
           count: jurisdictions.length,
           public_filtered: accessPolicies !== undefined,
           quality_bar_only,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("list_jurisdictions", err));
@@ -727,6 +719,12 @@ export function registerTools(server: McpServer) {
             tier,
             note: `No readable atom at DID ${atom_id}.`,
           });
+          logToolRead({
+            tool: "atom_trace",
+            atom_id,
+            tier,
+            found: false,
+          }, __readEnv.atoms);
           return envelopeContent(__readEnv);
         }
         const __readEnv = finalizeReadEnvelope(
@@ -734,13 +732,12 @@ export function registerTools(server: McpServer) {
           atomTraceEnvelope(trace, { tier }),
           trace?.atom?.accessPolicy as import("@hauska/atom-contract").AccessPolicy | undefined,
         );
-        logToolInvocation({
+        logToolRead({
           tool: "atom_trace",
           atom_id,
           tier,
           found: Boolean(trace),
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("atom_trace", err));
@@ -777,13 +774,12 @@ export function registerTools(server: McpServer) {
           limit,
         });
         const __readEnv = listPropertyWorkspacesEnvelope(response, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "list_property_workspaces",
           requester_key_id: identity.requesterKeyId,
           tier,
           count: response.workspaces.length,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("list_property_workspaces", err));
@@ -813,14 +809,13 @@ export function registerTools(server: McpServer) {
           requesterKeyId: identity.requesterKeyId,
         });
         const __readEnv = getPropertyWorkspaceEnvelope(response, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "get_property_workspace",
           workspace_id,
           requester_key_id: identity.requesterKeyId,
           tier,
           found: response.workspace !== null,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_property_workspace", err));
@@ -858,15 +853,14 @@ export function registerTools(server: McpServer) {
           consentVisibleOnly: consent_visible_only,
         });
         const __readEnv = listWorkspaceShareEdgesEnvelope(response, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "list_workspace_share_edges",
           workspace_id,
           requester_key_id: identity.requesterKeyId,
           tier,
           consent_visible_only,
           count: response.edges.length,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("list_workspace_share_edges", err));
@@ -923,14 +917,13 @@ export function registerTools(server: McpServer) {
           lng,
         });
         const __readEnv = resolvePlaceEnvelope(response, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "resolve_place",
           tier,
           jurisdiction_key: response.jurisdiction_key,
           latency_ms: Date.now() - started,
           place_key: response.placeKey,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         logToolInvocation({
@@ -974,17 +967,14 @@ export function registerTools(server: McpServer) {
           placeKey: place_key,
           requesterKeyId: identity.requesterKeyId,
         });
-        const atomCount = response.layers.filter((l) => l.atomDid).length;
         const __readEnv = getPlaceLayersEnvelope(response, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "get_place_layers",
           tier,
           jurisdiction_key: response.jurisdiction_key,
           latency_ms: Date.now() - started,
-          atom_ids_returned: atomCount,
           layer_count: response.layers.length,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         logToolInvocation({
@@ -1028,17 +1018,13 @@ export function registerTools(server: McpServer) {
           placeKey: place_key,
           requesterKeyId: identity.requesterKeyId,
         });
-        const refCount =
-          (response.inlineRefs?.length ?? 0) + (response.layers?.length ?? 0);
         const __readEnv = getPlaceDossierEnvelope(response, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "get_place_dossier",
           tier,
           jurisdiction_key: response.jurisdiction_key,
           latency_ms: Date.now() - started,
-          atom_ids_returned: refCount,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         logToolInvocation({
@@ -1092,14 +1078,13 @@ export function registerTools(server: McpServer) {
             }),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "codex_finding_generation",
           submission_id,
           tier,
           generation_id: response.generationId,
           already_in_flight: response.alreadyInFlight ?? false,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -1195,23 +1180,21 @@ export function registerTools(server: McpServer) {
           partition.submissionTenant,
         );
 
-        logToolInvocation({
+        const data: Record<string, unknown> = { findings };
+        if (include_status && statusPublic) {
+          data.status = statusPublic;
+        }
+        const __readEnv = codexEnvelope(data, atoms, { tier });
+        logToolRead({
           tool: "codex_findings_fetch",
           submission_id,
           tier,
           finding_count: findings.length,
           citation_atom_count: citationAtomCount,
           submission_tenant: partition.submissionTenant,
-        });
+        }, __readEnv.atoms);
 
-        const data: Record<string, unknown> = { findings };
-        if (include_status && statusPublic) {
-          data.status = statusPublic;
-        }
-
-        return envelopeContent(
-          codexEnvelope(data, atoms, { tier }),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("codex_findings_fetch", err),
@@ -1311,15 +1294,14 @@ export function registerTools(server: McpServer) {
                 }),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "codex_override_write",
           finding_id,
           severity,
           category,
           tier,
           citation_count: citations?.length ?? 0,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -1355,12 +1337,6 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.fetchBriefing({
           engagementId: engagement_id,
         });
-        logToolInvocation({
-          tool: "codex_briefing_fetch",
-          engagement_id,
-          tier,
-          has_briefing: response.briefing !== null,
-        });
         const provenance = response.briefing
           ? codexProvenance({
               atomKind: "parcel-briefing",
@@ -1369,7 +1345,14 @@ export function registerTools(server: McpServer) {
               sourcePath: `/api/engagements/${engagement_id}/briefing`,
             })
           : null;
-        return envelopeContent(codexEnvelope(response, provenance, { tier }));
+        const __readEnv = codexEnvelope(response, provenance, { tier });
+        logToolRead({
+          tool: "codex_briefing_fetch",
+          engagement_id,
+          tier,
+          has_briefing: response.briefing !== null,
+        }, __readEnv.atoms);
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("codex_briefing_fetch", err),
@@ -1444,14 +1427,13 @@ export function registerTools(server: McpServer) {
             }),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "codex_snapshot_ingest",
           engagement_id,
           submission_id: submissionId,
           discipline,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -1554,13 +1536,12 @@ export function registerTools(server: McpServer) {
             }),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_snapshot_register",
           engagement_id,
           project_name,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -1642,14 +1623,13 @@ export function registerTools(server: McpServer) {
             }),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_ifc_ingest",
           snapshot_id,
           filename,
           bytes: bytes.length,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("cortex_ifc_ingest", err));
@@ -1686,12 +1666,6 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.queryBimModel({
           engagementId: engagement_id,
         });
-        logToolInvocation({
-          tool: "cortex_bim_model_query",
-          engagement_id,
-          tier,
-          has_model: response.bimModel !== null,
-        });
         const provenance = response.bimModel
           ? codexProvenance({
               atomKind: "submission",
@@ -1700,7 +1674,14 @@ export function registerTools(server: McpServer) {
               sourcePath: `/api/engagements/${engagement_id}/bim-model`,
             })
           : null;
-        return envelopeContent(codexEnvelope(response, provenance, { tier }));
+        const __readEnv = codexEnvelope(response, provenance, { tier });
+        logToolRead({
+          tool: "cortex_bim_model_query",
+          engagement_id,
+          tier,
+          has_model: response.bimModel !== null,
+        }, __readEnv.atoms);
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_bim_model_query", err),
@@ -1760,14 +1741,13 @@ export function registerTools(server: McpServer) {
             }),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_briefing_emit",
           engagement_id,
           generation_id: response.generationId,
           already_in_flight: response.alreadyInFlight ?? false,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -1866,13 +1846,12 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.responseTask),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_response_task_create",
           engagement_id,
           response_task_id: response.responseTask.entityId,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -1912,13 +1891,12 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.responseTask),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_response_task_update_state",
           response_task_id,
           state,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -1959,14 +1937,13 @@ export function registerTools(server: McpServer) {
             response.responseTasks.map(lSurfaceProvenance),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_response_task_list",
           engagement_id,
           state,
           count: response.responseTasks.length,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2006,13 +1983,12 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.responseTask),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_response_task_link",
           response_task_id,
           finding_id,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2053,16 +2029,17 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.triggerSheetContentExtraction({
           sheetId: sheet_id,
         });
-        logToolInvocation({
+        const provenance = response.sheetContentExtraction
+          ? lSurfaceProvenance(response.sheetContentExtraction)
+          : null;
+        const __readEnv = codexEnvelope(response, provenance, { tier });
+        logToolRead({
           tool: "cortex_sheet_content_extraction_trigger",
           sheet_id,
           extracted: response.sheetContentExtraction !== null,
           tier,
-        });
-        const provenance = response.sheetContentExtraction
-          ? lSurfaceProvenance(response.sheetContentExtraction)
-          : null;
-        return envelopeContent(codexEnvelope(response, provenance, { tier }));
+        }, __readEnv.atoms);
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure(
@@ -2095,16 +2072,17 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.fetchSheetContentExtraction({
           sheetId: sheet_id,
         });
-        logToolInvocation({
+        const provenance = response.sheetContentExtraction
+          ? lSurfaceProvenance(response.sheetContentExtraction)
+          : null;
+        const __readEnv = codexEnvelope(response, provenance, { tier });
+        logToolRead({
           tool: "cortex_sheet_content_extraction_fetch",
           sheet_id,
           found: response.sheetContentExtraction !== null,
           tier,
-        });
-        const provenance = response.sheetContentExtraction
-          ? lSurfaceProvenance(response.sheetContentExtraction)
-          : null;
-        return envelopeContent(codexEnvelope(response, provenance, { tier }));
+        }, __readEnv.atoms);
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_sheet_content_extraction_fetch", err),
@@ -2146,14 +2124,13 @@ export function registerTools(server: McpServer) {
             response.attachedDocuments.map(lSurfaceProvenance),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_attached_document_list",
           engagement_id,
           document_type,
           count: response.attachedDocuments.length,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2188,12 +2165,11 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.attachedDocument),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_attached_document_fetch",
           attached_document_id,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2285,14 +2261,13 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.deliverableLetter),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_deliverable_letter_create",
           engagement_id,
           letter_id: response.deliverableLetter.entityId,
           section_count: response.deliverableLetter.sections.length,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2345,14 +2320,13 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.deliverableLetter),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_deliverable_letter_update_section",
           letter_id,
           section_index,
           kind,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2435,13 +2409,12 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.deliverableLetter),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_deliverable_letter_attach_provenance",
           letter_id,
           section_index,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2523,12 +2496,11 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.deliverableLetter),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_deliverable_letter_send",
           letter_id,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         // A 409 here is the completeness gate. Surface the missing
@@ -2644,14 +2616,13 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.detailCalloutSpec),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_detail_callout_spec_create",
           engagement_id,
           detail_type,
           spec_id: response.detailCalloutSpec.entityId,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2691,13 +2662,12 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.detailCalloutSpec),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_detail_callout_spec_update_push_state",
           spec_id,
           push_state,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         // A 409 here is the illegal-transition gate. Surface the legal
@@ -2770,12 +2740,11 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.detailCalloutSpec),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_detail_callout_spec_attach_aps_ref",
           spec_id,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2817,14 +2786,13 @@ export function registerTools(server: McpServer) {
             response.detailCalloutSpecs.map(lSurfaceProvenance),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_detail_callout_spec_list",
           engagement_id,
           push_state,
           count: response.detailCalloutSpecs.length,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2859,12 +2827,11 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.detailCalloutSpec),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_detail_callout_spec_get",
           spec_id,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -2960,14 +2927,13 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.productSpecReference),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_product_spec_reference_create",
           engagement_id,
           esr_number,
           reference_id: response.productSpecReference.entityId,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -3004,13 +2970,12 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.productSpecReference),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_product_spec_reference_refresh_status",
           reference_id,
           status: response.productSpecReference.status,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -3053,14 +3018,13 @@ export function registerTools(server: McpServer) {
             response.productSpecReferences.map(lSurfaceProvenance),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_product_spec_reference_list",
           engagement_id,
           status,
           count: response.productSpecReferences.length,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -3095,12 +3059,11 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.productSpecReference),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_product_spec_reference_get",
           reference_id,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -3159,14 +3122,13 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.render),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_deliverable_letter_render",
           letter_id,
           format,
           render_id: response.render.entityId,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         // A 409 here is the completeness gate (same shape as
@@ -3223,13 +3185,12 @@ export function registerTools(server: McpServer) {
             response.renders.map(lSurfaceProvenance),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_deliverable_letter_renders_list",
           letter_id,
           count: response.renders.length,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -3284,14 +3245,13 @@ export function registerTools(server: McpServer) {
             response.deliverableLetters.map(lSurfaceProvenance),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_deliverable_letter_list",
           engagement_id,
           status,
           count: response.deliverableLetters.length,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -3325,12 +3285,11 @@ export function registerTools(server: McpServer) {
             lSurfaceProvenance(response.deliverableLetter),
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "cortex_deliverable_letter_fetch",
           letter_id,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
@@ -3363,14 +3322,6 @@ export function registerTools(server: McpServer) {
         const download = await legacyClient.downloadDeliverableLetterRender({
           renderId: render_id,
         });
-        logToolInvocation({
-          tool: "cortex_deliverable_letter_render_download",
-          render_id,
-          content_type: download.contentType,
-          byte_length: download.bytes.byteLength,
-          tier,
-          atom_ids: [`did:hauska:deliverable-letter-render:${render_id}`],
-        });
         const metaEnvelope = finalizeReadEnvelope(
           "cortex_deliverable_letter_render_download",
           buildEnvelope(
@@ -3399,6 +3350,13 @@ export function registerTools(server: McpServer) {
             { tier, readKind: "legacy-deterministic" },
           ),
         );
+        logToolRead({
+          tool: "cortex_deliverable_letter_render_download",
+          render_id,
+          content_type: download.contentType,
+          byte_length: download.bytes.byteLength,
+          tier,
+        }, metaEnvelope.atoms);
         return {
           content: [
             {
@@ -3467,15 +3425,13 @@ export function registerTools(server: McpServer) {
           presentationMode: presentation_mode,
         });
         const __readEnv = generateBriefEnvelope(response, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "generate_property_brief",
           tier,
           run_id: response.runId,
           jurisdiction_key: response.jurisdiction ?? undefined,
           latency_ms: Date.now() - started,
-          atom_ids_returned: (response.atoms?.inlineRefs?.length ?? 0) + 1,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         logToolInvocation({
@@ -3505,12 +3461,11 @@ export function registerTools(server: McpServer) {
       try {
         const response = await legacyClient.getBriefRun({ runId: run_id });
         const __readEnv = getBriefRunEnvelope(response, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "get_property_brief_run",
           run_id,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_property_brief_run", err));
@@ -3584,13 +3539,12 @@ export function registerTools(server: McpServer) {
               : null,
             { tier },
           );
-        logToolInvocation({
+        logToolRead({
           tool: "simulate_site_drainage",
           engagement_id,
           tier,
           flow_line_count: response.flowLineCount,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("simulate_site_drainage", err));
@@ -3633,13 +3587,12 @@ export function registerTools(server: McpServer) {
                 designStorms: typeof designStorms;
               }>)
             : baseEnv;
-        logToolInvocation({
+        logToolRead({
           tool: "get_site_drainage",
           engagement_id,
           tier,
           include_design_storms,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv as ToolEnvelope<unknown>);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_site_drainage", err));
@@ -3677,13 +3630,12 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
         });
         const __readEnv = siteTopographyEnvelope(response, engagement_id, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "get_site_topography",
           engagement_id,
           tier,
           refreshed: refresh,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_site_topography", err));
@@ -3715,14 +3667,13 @@ export function registerTools(server: McpServer) {
           workspaceDid: workspace_did,
         });
         const __readEnv = encumbrancesEnvelope(response, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "search_encumbrances",
           workspace_did,
           tier,
           instrument_count: response.instruments.length,
           clause_count: response.clauses.length,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("search_encumbrances", err));
@@ -3748,13 +3699,12 @@ export function registerTools(server: McpServer) {
           workspaceDid: workspace_did,
         });
         const __readEnv = restrictionsEnvelope(response, { tier });
-        logToolInvocation({
+        logToolRead({
           tool: "get_restrictions",
           workspace_did,
           tier,
           clause_count: response.clauses.length,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_restrictions", err));
@@ -3792,24 +3742,22 @@ export function registerTools(server: McpServer) {
             response as import("./legacy-client.js").CredentialPendingResponse,
             { tier, note: "Cotality quartet: atoms[] empty until CoreLogic OAuth materializes adapter atoms." },
           );
-        logToolInvocation({
+        logToolRead({
           tool,
           tier,
           credential_pending: true,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       }
       const __readEnv = codexEnvelope(response, [], {
         tier,
         note: "Cotality adapter response — atoms[] empty until OAuth materializes Cotality atoms on the wire.",
       });
-      logToolInvocation({
+      logToolRead({
         tool,
         tier,
         credential_pending: false,
-        envelope: __readEnv,
-      });
+      }, __readEnv.atoms);
       return envelopeContent(__readEnv);
     });
   }
@@ -3946,13 +3894,12 @@ export function registerTools(server: McpServer) {
             readKind: "catalog",
           }),
         );
-        logToolInvocation({
+        logToolRead({
           tool: "assemble_map_layers",
           tier,
           layer_count: engineEnvelope.payload.layers.length,
           tenant_scope: engineEnvelope.payload.tenantScope,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         if (err instanceof EngineApiUnreachableError) {
@@ -4025,16 +3972,15 @@ export function registerTools(server: McpServer) {
         }
         const __readEnv = buildEnvelope(
           { export: outcome.export },
-          [],
+          readEnv.atoms,
           { tier, readKind: "catalog" },
         );
-        logToolInvocation({
+        logToolRead({
           tool: "atom_export",
           atom_id,
           requester_key_id: identity.requesterKeyId,
           tier,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("atom_export", err));
@@ -4113,13 +4059,12 @@ export function registerTools(server: McpServer) {
           ),
           getAtom.atom.accessPolicy as import("@hauska/atom-contract").AccessPolicy | undefined,
         );
-        logToolInvocation({
+        logToolRead({
           tool: "read_atom_calibration",
           atom_id,
           tier,
           overlay_available: overlayReadContract !== undefined,
-          envelope: __readEnv,
-        });
+        }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("read_atom_calibration", err));
