@@ -3,25 +3,34 @@
 // Orthogonal to tier. A key's tier governs rate-limit bands; its
 // product governs which tool namespaces it may call.
 //
-//   public  — substrate catalog tools (search_atoms, get_atom,
-//             list_jurisdictions, query_jurisdiction, search_permit_atoms).
-//   codex   — Empressa Codex (plan-review) tools, per Lane B dispatch.
-//   cortex  — Empressa Cortex (design accelerator) tools, per Lane B
-//             dispatch.
+//   public    — substrate catalog (search_atoms, get_atom, atom_trace, …).
+//   codex     — Empressa Codex plan-review; also spans public catalog reads.
+//   reporting — property briefs, encumbrances, L-surface deliverables, place/workspace.
+//   map       — parcel polygons, hazards, hydrology, topography, map-layer assembly.
 //
-// Per 29_mcp_surface_tier_model.md, Codex and Cortex are per-product
-// MCP surfaces with their own buyer + tier semantics distinct from the
-// substrate four-band model. Modeling them as a separate dimension
-// avoids conflating the substrate tier axis with per-product seats.
+// Legacy `cortex` keys are normalized to `reporting` at read time (migration 003).
 
-export type Product = "public" | "codex" | "cortex";
+export type Product = "public" | "codex" | "reporting" | "map";
+
+/** @deprecated Use reporting or map. Accepted only when normalizing stored keys. */
+export type LegacyProduct = "cortex";
 
 export const PRODUCTS: readonly Product[] = [
   "public",
   "codex",
-  "cortex",
+  "reporting",
+  "map",
 ] as const;
 
+const PRODUCT_SET = new Set<string>(PRODUCTS);
+
 export function isProduct(value: string): value is Product {
-  return (PRODUCTS as readonly string[]).includes(value);
+  return PRODUCT_SET.has(value);
+}
+
+/** Map stored api_keys.product to the live gate union (incl. legacy cortex). */
+export function normalizeStoredProduct(value: string): Product {
+  if (isProduct(value)) return value;
+  if (value === "cortex") return "reporting";
+  return "public";
 }

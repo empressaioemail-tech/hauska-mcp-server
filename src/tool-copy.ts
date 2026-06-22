@@ -6,7 +6,7 @@ export const PUBLIC_TIER =
   "Typical failures: no_coverage (jurisdiction not in list_jurisdictions), empty_corpus, upstream_timeout.";
 
 export const BROKERAGE_TIER =
-  "Tier: product read (authenticated API key — cortex or brokerage product). " +
+  "Tier: product read (authenticated reporting API key). " +
   "Example jurisdiction_key: bastrop-tx, cedar-hill-tx (Central TX pilot). " +
   "Typical failures: auth_reject (missing/invalid key), geocode_miss, no_coverage, upstream_timeout.";
 
@@ -17,6 +17,16 @@ export const CODEX_TIER =
 export const CORTEX_TIER =
   "Tier: product Layer 2 Cortex (cortex API key). Not anonymous. " +
   "Typical failures: auth_reject, upstream_timeout, 404 (engagement/snapshot missing).";
+
+export const REPORTING_TIER =
+  "Tier: product Layer 2 Reporting (reporting API key). Not anonymous. " +
+  "Property briefs, encumbrances, L-surface deliverables, place/workspace reads. " +
+  "Typical failures: auth_reject, upstream_timeout, 404 (engagement/workspace missing).";
+
+export const MAP_TIER =
+  "Tier: product Layer 2 Map (map API key). Not anonymous. " +
+  "Parcel polygons, hazards, hydrology, topography, map-layer assembly. " +
+  "Typical failures: auth_reject, no_coverage, upstream_timeout.";
 
 export const TOOL_COPY = {
   search_atoms:
@@ -75,53 +85,75 @@ export const TOOL_COPY = {
 
   generate_property_brief:
     "Generate a Property Brief for an address: reasoning summary, lay summary, site-context layers, and cited code atoms. " +
-    "Returns a brief-run atom (did:hauska:brief-run:<runId>). Layer 2 keystone — requires cortex product key. " +
-    CORTEX_TIER,
+    "Returns a brief-run atom (did:hauska:brief-run:<runId>). Layer 2 keystone — requires reporting product key. " +
+    REPORTING_TIER,
 
   get_property_brief_run:
     "Fetch a stored Property Brief run by runId. Read companion to generate_property_brief. " +
-    CORTEX_TIER,
+    REPORTING_TIER,
 
   simulate_site_drainage:
     "Run site-drainage simulation for an engagement (D8 flow routing + rainfall forcing). " +
     "Engagement-scoped — requires engagement_id. Returns site-drainage ingest status. " +
-    CORTEX_TIER,
+    MAP_TIER,
 
   get_site_drainage:
     "Read the active site-drainage atom for an engagement. Optionally include NOAA Atlas 14 design-storm estimates. " +
-    CORTEX_TIER,
+    MAP_TIER,
 
   get_site_topography:
     "Read site-topography for an engagement (DEM, contours). Set refresh=true to trigger ingest first. " +
-    CORTEX_TIER,
+    MAP_TIER,
 
   search_encumbrances:
     "List recorded-instrument and restriction-clause atoms uploaded to a property workspace. " +
     "Workspace-scoped via workspace_did. " +
-    CORTEX_TIER,
+    REPORTING_TIER,
 
   get_restrictions:
     "Fetch restriction-clause atoms for a property workspace (ADR-020/021). Workspace-scoped via workspace_did. " +
-    CORTEX_TIER,
+    REPORTING_TIER,
 
   get_property_detail:
     "Cotality property-characteristics adapter (DESIGNED, INERT until CoreLogic OAuth clears). " +
-    "Returns credential-pending when credentials are absent — never fake data. " +
-    CORTEX_TIER,
+    "Returns credential-pending when credentials are absent — never fake data. atoms[] stays empty until OAuth materializes Cotality atoms. " +
+    REPORTING_TIER,
 
   get_replacement_cost:
-    "Cotality replacement-cost adapter (DESIGNED, INERT until CoreLogic OAuth clears). " +
-    CORTEX_TIER,
+    "Cotality replacement-cost adapter (DESIGNED, INERT until CoreLogic OAuth clears). atoms[] empty until OAuth. " +
+    REPORTING_TIER,
 
   get_hazard_profile:
-    "Cotality hazard/climate adapter (DESIGNED, INERT until CoreLogic OAuth clears). " +
-    CORTEX_TIER,
+    "Cotality hazard/climate adapter (DESIGNED, INERT until CoreLogic OAuth clears). atoms[] empty until OAuth. " +
+    MAP_TIER,
 
   get_parcel_polygon:
-    "Cotality parcel-polygon adapter (DESIGNED, INERT until CoreLogic OAuth clears). " +
-    CORTEX_TIER,
+    "Cotality parcel-polygon adapter (DESIGNED, INERT until CoreLogic OAuth clears). atoms[] empty until OAuth. " +
+    MAP_TIER,
 
   compose_workspace:
     "Select and arrange Hauska cortex workspace tiles from a natural-language intent. Reads the live tile capability registry, filters to tiles whose requirements are satisfied by the engagement (when engagement_id is given), keyword-ranks against the intent, and returns a WorkspaceComposition { tiles, layoutId, engagementId?, why } that can be passed directly to the @hauska/tile-shell CortexShell. " +
-    CORTEX_TIER,
+    REPORTING_TIER,
+
+  assemble_map_layers:
+    "Assemble parcel-keyed map layers (parcel polygon, flood zone, zoning, and Max-tier wave-3 slots) " +
+    "via engine-api gate-front proxy. Requires map product key with tenant binding. " +
+    "Rich layers (floodway, dem, topography, opportunity-zone-tract) require Max-tier entitlement (team/embedder). " +
+    MAP_TIER,
+
+  atom_trace:
+    "Parcel-to-atoms-to-lineage trace for one atom DID: context summary, provenance, citations, inbound+outbound graph. " +
+    "Public catalog — anonymous OK. " +
+    PUBLIC_TIER,
+
+  atom_export:
+    "Export a DownloadableAtom bundle (identity, context, read-contract, composition refs, citations, signed chain). " +
+    "accessPolicy-gated: caller exports own tenant-private atoms plus public atoms composed by reference. " +
+    "Requires authenticated API key. BLOCKED-54: tenant-leg compose enforcement is partial until tenant leg ships. " +
+    REPORTING_TIER,
+
+  read_atom_calibration:
+    "Calibration-overlay read-contract-per-atom: widthed read-contract with overlay-adjusted confidence when engine overlay row exists. " +
+    "Requires reporting product key. Falls back to catalog read-contract when overlay route is not yet deployed. " +
+    REPORTING_TIER,
 } as const;

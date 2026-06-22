@@ -22,6 +22,7 @@ import {
   encumbrancesEnvelope,
   generateBriefEnvelope,
   getAtomEnvelope,
+  atomTraceEnvelope,
   getBriefRunEnvelope,
   getPlaceDossierEnvelope,
   getPlaceLayersEnvelope,
@@ -37,14 +38,40 @@ import {
   searchPermitAtomsEnvelope,
   siteDrainageEnvelope,
   siteTopographyEnvelope,
+  buildEnvelope,
   type ToolEnvelope,
 } from "./atom-shape.js";
+import { assembleDownloadableAtomExport } from "./atom-export.js";
+import { checkReadToolConformance } from "./conformance-check.js";
+import {
+  EngineApiHttpError,
+  EngineApiUnreachableError,
+  engineApiClient,
+} from "./engine-api-client.js";
+import {
+  gateFrontProductFor,
+  resolveGateAccessTier,
+  resolveGateTenantId,
+} from "./gate-front.js";
+import {
+  assertJurisdictionTenantScope,
+  assertMapLayersPackageGate,
+  assertResponseTenantScope,
+  filterLayersForEntitlement,
+} from "./gate-packages.js";
+import {
+  mapLayersBboxSchema,
+  mapLayersJurisdictionSchema,
+  mapLayersParcelSchema,
+  mapLayerKeySchema,
+} from "./map-layers-contract.js";
+import { requiredProductForTool } from "./product-gates.js";
 import {
   logToolInvocation,
   placeApiEnabled,
   type GtmErrorClass,
 } from "./gtm-observability.js";
-import { TOOL_COPY, CODEX_TIER, CORTEX_TIER } from "./tool-copy.js";
+import { TOOL_COPY, CODEX_TIER, CORTEX_TIER, REPORTING_TIER, MAP_TIER } from "./tool-copy.js";
 import {
   EngineHttpError,
   EngineUnreachableError,
@@ -232,17 +259,54 @@ function assertAtomReadable(
 // AsyncLocalStorage bindings without spinning up a full McpServer.
 export function requireProduct(
   tool: string,
-  expected: Product,
+  expected: Product | readonly Product[],
 ): { ok: true } | { ok: false; content: ReturnType<typeof errorContent> } {
   const actual = getCurrentProduct();
-  if (actual === expected) return { ok: true };
-  logger.warn("tool_product_denied", { tool, expected, actual });
+  const allowed = Array.isArray(expected) ? expected : [expected];
+  if (allowed.includes(actual)) return { ok: true };
+  const expectedLabel = allowed.join('" or "');
+  logger.warn("tool_product_denied", { tool, expected: allowed, actual });
   return {
     ok: false,
     content: errorContent(
-      `Tool "${tool}" requires a "${expected}"-product API key. The caller is on product "${actual}". Contact support@hauska.dev to request access.`,
+      `Tool "${tool}" requires a "${expectedLabel}"-product API key. The caller is on product "${actual}". Contact support@hauska.dev to request access.`,
     ),
   };
+}
+
+function requireToolProduct(
+  tool: string,
+): { ok: true } | { ok: false; content: ReturnType<typeof errorContent> } {
+  const expected = requiredProductForTool(tool);
+  if (!expected) return { ok: true };
+  return requireProduct(tool, expected);
+}
+
+function finalizeReadEnvelope<T>(
+  tool: string,
+  envelope: ToolEnvelope<T>,
+  accessPolicy?: import("@hauska/atom-contract").AccessPolicy,
+): ToolEnvelope<T> {
+  const conformance = checkReadToolConformance({
+    tool,
+    readContract: envelope.readContract,
+    accessPolicy,
+  });
+  if (!conformance.ok) {
+    return {
+      ...envelope,
+      meta: {
+        ...envelope.meta,
+        note: [
+          envelope.meta.note,
+          `Conformance ${conformance.conformanceTargetVersion} miss (non-fatal).`,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      },
+    };
+  }
+  return envelope;
 }
 
 function requireIdentifiedCaller(
@@ -315,6 +379,7 @@ export function registerTools(server: McpServer) {
           { tool: "search_atoms" },
         );
         const filteredResponse = { ...response, results: filtered };
+        const __readEnv = searchAtomsEnvelope(filteredResponse, { tier });
         logToolInvocation({
           tool: "search_atoms",
           query,
@@ -323,8 +388,9 @@ export function registerTools(server: McpServer) {
           tier,
           count: filtered.length,
           pre_filter_count: response.results.length,
+          envelope: __readEnv,
         });
-        return envelopeContent(searchAtomsEnvelope(filteredResponse, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("search_atoms", err));
       }
@@ -360,38 +426,54 @@ export function registerTools(server: McpServer) {
           atomDid: atom_id,
           includeComposition: include_composition,
         });
-        logToolInvocation({
-          tool: "get_atom",
-          atom_id,
-          tier,
-          found: response.atom !== null,
-          composition_count: response.composition?.length ?? 0,
-        });
         if (!response.atom) {
-          return envelopeContent(
-            getAtomEnvelope(response, {
-              tier,
-              note: `No atom found at DID ${atom_id}.`,
-            }),
-          );
+          const __readEnv = getAtomEnvelope(response, {
+            tier,
+            note: `No atom found at DID ${atom_id}.`,
+          });
+          logToolInvocation({
+            tool: "get_atom",
+            atom_id,
+            tier,
+            found: false,
+            envelope: __readEnv,
+          });
+          return envelopeContent(__readEnv);
         }
         if (!assertAtomReadable("get_atom", response.atom)) {
-          return envelopeContent(
-            getAtomEnvelope({ atom: null, composition: [] }, {
-              tier,
-              note: `No atom found at DID ${atom_id}.`,
-            }),
-          );
+          const __readEnv = getAtomEnvelope({ atom: null, composition: [] }, {
+            tier,
+            note: `No atom found at DID ${atom_id}.`,
+          });
+          logToolInvocation({
+            tool: "get_atom",
+            atom_id,
+            tier,
+            found: false,
+            envelope: __readEnv,
+          });
+          return envelopeContent(__readEnv);
         }
         const composition = response.composition?.filter(
           (edge) => edge.atom && assertAtomReadable("get_atom", edge.atom),
         );
-        return envelopeContent(
+        const __readEnv = finalizeReadEnvelope(
+          "get_atom",
           getAtomEnvelope(
             { ...response, composition },
             { tier },
           ),
+          response.atom.accessPolicy as import("@hauska/atom-contract").AccessPolicy | undefined,
         );
+        logToolInvocation({
+          tool: "get_atom",
+          atom_id,
+          tier,
+          found: true,
+          composition_count: composition?.length ?? 0,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("get_atom", err));
       }
@@ -429,19 +511,19 @@ export function registerTools(server: McpServer) {
           jurisdiction,
           queryType: query_type,
         });
-        logToolInvocation({
-          tool: "query_jurisdiction",
-          jurisdiction,
-          tier,
-          found: response.status !== null,
-        });
         if (!response.status) {
-          return envelopeContent(
-            queryJurisdictionEnvelope(response, {
-              tier,
-              note: `Jurisdiction "${jurisdiction}" is not loaded. Call list_jurisdictions to see available tenants.`,
-            }),
-          );
+          const __readEnv = queryJurisdictionEnvelope(response, {
+            tier,
+            note: `Jurisdiction "${jurisdiction}" is not loaded. Call list_jurisdictions to see available tenants.`,
+          });
+          logToolInvocation({
+            tool: "query_jurisdiction",
+            jurisdiction,
+            tier,
+            found: false,
+            envelope: __readEnv,
+          });
+          return envelopeContent(__readEnv);
         }
         const subject = getCurrentAccessSubject();
         const statusReadable = canReadAccessTarget(subject, {
@@ -460,12 +542,18 @@ export function registerTools(server: McpServer) {
             platformInternal: subject.platformInternal,
             reason: "jurisdiction_status",
           });
-          return envelopeContent(
-            queryJurisdictionEnvelope({ status: null }, {
-              tier,
-              note: `Jurisdiction "${jurisdiction}" is not loaded. Call list_jurisdictions to see available tenants.`,
-            }),
-          );
+          const __readEnv = queryJurisdictionEnvelope({ status: null }, {
+            tier,
+            note: `Jurisdiction "${jurisdiction}" is not loaded. Call list_jurisdictions to see available tenants.`,
+          });
+          logToolInvocation({
+            tool: "query_jurisdiction",
+            jurisdiction,
+            tier,
+            found: false,
+            envelope: __readEnv,
+          });
+          return envelopeContent(__readEnv);
         }
         const permitAtoms = response.permitAtoms
           ? filterByAccessPolicy(
@@ -478,9 +566,18 @@ export function registerTools(server: McpServer) {
               { tool: "query_jurisdiction" },
             )
           : undefined;
-        return envelopeContent(
-          queryJurisdictionEnvelope({ ...response, permitAtoms }, { tier }),
+        const __readEnv = queryJurisdictionEnvelope(
+          { ...response, permitAtoms },
+          { tier },
         );
+        logToolInvocation({
+          tool: "query_jurisdiction",
+          jurisdiction,
+          tier,
+          found: true,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("query_jurisdiction", err));
       }
@@ -532,16 +629,16 @@ export function registerTools(server: McpServer) {
               { tool: "search_permit_atoms" },
             )
           : undefined;
+        const __readEnv = searchPermitAtomsEnvelope({ ...response, permitAtoms }, { tier });
         logToolInvocation({
           tool: "search_permit_atoms",
           jurisdiction,
           project_type,
           tier,
           count: permitAtoms?.length ?? 0,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          searchPermitAtomsEnvelope({ ...response, permitAtoms }, { tier }),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("search_permit_atoms", err));
       }
@@ -588,18 +685,69 @@ export function registerTools(server: McpServer) {
           }),
           { tool: "list_jurisdictions" },
         );
+        const __readEnv = listJurisdictionsEnvelope({ jurisdictions }, { tier });
         logToolInvocation({
           tool: "list_jurisdictions",
           tier,
           count: jurisdictions.length,
           public_filtered: accessPolicies !== undefined,
           quality_bar_only,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          listJurisdictionsEnvelope({ jurisdictions }, { tier }),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("list_jurisdictions", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 6: atom_trace
+  // Engine GET /atoms/trace/:did — parcel-to-atoms-to-lineage (public).
+  // -----------------------------------------------------------------
+  server.tool(
+    "atom_trace",
+    TOOL_COPY.atom_trace,
+    {
+      atom_id: z
+        .string()
+        .regex(ATOM_DID_REGEX, "atom_id must be a Hauska DID")
+        .describe("Atom DID to trace. Required."),
+      audience: z
+        .enum(["user", "ai", "internal"])
+        .optional()
+        .default("ai")
+        .describe("Scope audience for context summary filtering."),
+    },
+    async ({ atom_id, audience }) => {
+      const tier = getCurrentTier();
+      try {
+        const trace = await hauskaClient.getAtomTrace({
+          atomDid: atom_id,
+          audience,
+        });
+        if (trace?.atom && !assertAtomReadable("atom_trace", trace.atom)) {
+          const __readEnv = atomTraceEnvelope(null, {
+            tier,
+            note: `No readable atom at DID ${atom_id}.`,
+          });
+          return envelopeContent(__readEnv);
+        }
+        const __readEnv = finalizeReadEnvelope(
+          "atom_trace",
+          atomTraceEnvelope(trace, { tier }),
+          trace?.atom?.accessPolicy as import("@hauska/atom-contract").AccessPolicy | undefined,
+        );
+        logToolInvocation({
+          tool: "atom_trace",
+          atom_id,
+          tier,
+          found: Boolean(trace),
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        return errorContent(describeEngineFailure("atom_trace", err));
       }
     },
   );
@@ -622,6 +770,8 @@ export function registerTools(server: McpServer) {
         .describe("Maximum number of workspace summaries to return. Defaults to 25."),
     },
     async ({ limit }) => {
+      const productGate = requireToolProduct("list_property_workspaces");
+      if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("list_property_workspaces");
       if (!identity.ok) return identity.content;
       const tier = getCurrentTier();
@@ -630,13 +780,15 @@ export function registerTools(server: McpServer) {
           requesterKeyId: identity.requesterKeyId,
           limit,
         });
+        const __readEnv = listPropertyWorkspacesEnvelope(response, { tier });
         logToolInvocation({
           tool: "list_property_workspaces",
           requester_key_id: identity.requesterKeyId,
           tier,
           count: response.workspaces.length,
+          envelope: __readEnv,
         });
-        return envelopeContent(listPropertyWorkspacesEnvelope(response, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("list_property_workspaces", err));
       }
@@ -654,6 +806,8 @@ export function registerTools(server: McpServer) {
       workspace_id: z.string().min(1).describe("Stable workspace id. Required."),
     },
     async ({ workspace_id }) => {
+      const productGate = requireToolProduct("get_property_workspace");
+      if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("get_property_workspace");
       if (!identity.ok) return identity.content;
       const tier = getCurrentTier();
@@ -662,14 +816,16 @@ export function registerTools(server: McpServer) {
           workspaceId: workspace_id,
           requesterKeyId: identity.requesterKeyId,
         });
+        const __readEnv = getPropertyWorkspaceEnvelope(response, { tier });
         logToolInvocation({
           tool: "get_property_workspace",
           workspace_id,
           requester_key_id: identity.requesterKeyId,
           tier,
           found: response.workspace !== null,
+          envelope: __readEnv,
         });
-        return envelopeContent(getPropertyWorkspaceEnvelope(response, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_property_workspace", err));
       }
@@ -694,6 +850,8 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ workspace_id, consent_visible_only }) => {
+      const productGate = requireToolProduct("list_workspace_share_edges");
+      if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("list_workspace_share_edges");
       if (!identity.ok) return identity.content;
       const tier = getCurrentTier();
@@ -703,6 +861,7 @@ export function registerTools(server: McpServer) {
           requesterKeyId: identity.requesterKeyId,
           consentVisibleOnly: consent_visible_only,
         });
+        const __readEnv = listWorkspaceShareEdgesEnvelope(response, { tier });
         logToolInvocation({
           tool: "list_workspace_share_edges",
           workspace_id,
@@ -710,8 +869,9 @@ export function registerTools(server: McpServer) {
           tier,
           consent_visible_only,
           count: response.edges.length,
+          envelope: __readEnv,
         });
-        return envelopeContent(listWorkspaceShareEdgesEnvelope(response, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("list_workspace_share_edges", err));
       }
@@ -736,6 +896,8 @@ export function registerTools(server: McpServer) {
       lng: z.number().optional().describe("Longitude. Required with lat if address omitted."),
     },
     async ({ address, lat, lng }) => {
+      const productGate = requireToolProduct("resolve_place");
+      if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("resolve_place");
       if (!identity.ok) return identity.content;
       if (!placeApiEnabled()) {
@@ -764,14 +926,16 @@ export function registerTools(server: McpServer) {
           lat,
           lng,
         });
+        const __readEnv = resolvePlaceEnvelope(response, { tier });
         logToolInvocation({
           tool: "resolve_place",
           tier,
           jurisdiction_key: response.jurisdiction_key,
           latency_ms: Date.now() - started,
           place_key: response.placeKey,
+          envelope: __readEnv,
         });
-        return envelopeContent(resolvePlaceEnvelope(response, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         logToolInvocation({
           tool: "resolve_place",
@@ -794,6 +958,8 @@ export function registerTools(server: McpServer) {
       place_key: z.string().min(1).describe("placeKey from resolve_place. Required."),
     },
     async ({ place_key }) => {
+      const productGate = requireToolProduct("get_place_layers");
+      if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("get_place_layers");
       if (!identity.ok) return identity.content;
       if (!placeApiEnabled()) {
@@ -813,6 +979,7 @@ export function registerTools(server: McpServer) {
           requesterKeyId: identity.requesterKeyId,
         });
         const atomCount = response.layers.filter((l) => l.atomDid).length;
+        const __readEnv = getPlaceLayersEnvelope(response, { tier });
         logToolInvocation({
           tool: "get_place_layers",
           tier,
@@ -820,8 +987,9 @@ export function registerTools(server: McpServer) {
           latency_ms: Date.now() - started,
           atom_ids_returned: atomCount,
           layer_count: response.layers.length,
+          envelope: __readEnv,
         });
-        return envelopeContent(getPlaceLayersEnvelope(response, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         logToolInvocation({
           tool: "get_place_layers",
@@ -844,6 +1012,8 @@ export function registerTools(server: McpServer) {
       place_key: z.string().min(1).describe("placeKey from resolve_place. Required."),
     },
     async ({ place_key }) => {
+      const productGate = requireToolProduct("get_place_dossier");
+      if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("get_place_dossier");
       if (!identity.ok) return identity.content;
       if (!placeApiEnabled()) {
@@ -864,14 +1034,16 @@ export function registerTools(server: McpServer) {
         });
         const refCount =
           (response.inlineRefs?.length ?? 0) + (response.layers?.length ?? 0);
+        const __readEnv = getPlaceDossierEnvelope(response, { tier });
         logToolInvocation({
           tool: "get_place_dossier",
           tier,
           jurisdiction_key: response.jurisdiction_key,
           latency_ms: Date.now() - started,
           atom_ids_returned: refCount,
+          envelope: __readEnv,
         });
-        return envelopeContent(getPlaceDossierEnvelope(response, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         logToolInvocation({
           tool: "get_place_dossier",
@@ -914,15 +1086,7 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.generateFindings({
           submissionId: submission_id,
         });
-        logToolInvocation({
-          tool: "codex_finding_generation",
-          submission_id,
-          tier,
-          generation_id: response.generationId,
-          already_in_flight: response.alreadyInFlight ?? false,
-        });
-        return envelopeContent(
-          codexEnvelope(
+        const __readEnv = codexEnvelope(
             response,
             codexProvenance({
               atomKind: "finding-generation-run",
@@ -931,8 +1095,16 @@ export function registerTools(server: McpServer) {
               sourcePath: `/api/submissions/${submission_id}/findings/generate`,
             }),
             { tier },
-          ),
-        );
+          );
+        logToolInvocation({
+          tool: "codex_finding_generation",
+          submission_id,
+          tier,
+          generation_id: response.generationId,
+          already_in_flight: response.alreadyInFlight ?? false,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("codex_finding_generation", err),
@@ -1131,16 +1303,7 @@ export function registerTools(server: McpServer) {
                 getCurrentAccessSubject().jurisdictionTenant ?? "legacy",
               )
             : [];
-        logToolInvocation({
-          tool: "codex_override_write",
-          finding_id,
-          severity,
-          category,
-          tier,
-          citation_count: citations?.length ?? 0,
-        });
-        return envelopeContent(
-          codexEnvelope(
+        const __readEnv = codexEnvelope(
             response,
             overrideAtoms.length > 0
               ? overrideAtoms
@@ -1151,8 +1314,17 @@ export function registerTools(server: McpServer) {
                   sourcePath: `/api/findings/${finding_id}/override`,
                 }),
             { tier },
-          ),
-        );
+          );
+        logToolInvocation({
+          tool: "codex_override_write",
+          finding_id,
+          severity,
+          category,
+          tier,
+          citation_count: citations?.length ?? 0,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("codex_override_write", err),
@@ -1266,15 +1438,7 @@ export function registerTools(server: McpServer) {
           typeof response.submission?.id === "string"
             ? response.submission.id
             : engagement_id;
-        logToolInvocation({
-          tool: "codex_snapshot_ingest",
-          engagement_id,
-          submission_id: submissionId,
-          discipline,
-          tier,
-        });
-        return envelopeContent(
-          codexEnvelope(
+        const __readEnv = codexEnvelope(
             response,
             codexProvenance({
               atomKind: "submission",
@@ -1283,8 +1447,16 @@ export function registerTools(server: McpServer) {
               sourcePath: `/api/engagements/${engagement_id}/submissions`,
             }),
             { tier },
-          ),
-        );
+          );
+        logToolInvocation({
+          tool: "codex_snapshot_ingest",
+          engagement_id,
+          submission_id: submissionId,
+          discipline,
+          tier,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("codex_snapshot_ingest", err),
@@ -1350,7 +1522,7 @@ export function registerTools(server: McpServer) {
       revit_document_path,
       payload,
     }) => {
-      const gate = requireProduct("cortex_snapshot_register", "cortex");
+      const gate = requireProduct("cortex_snapshot_register", "reporting");
       if (!gate.ok) return gate.content;
       if (!engagement_id && !project_name) {
         return errorContent(
@@ -1376,14 +1548,7 @@ export function registerTools(server: McpServer) {
           (typeof response["snapshotId"] === "string" && response["snapshotId"]) ||
           (typeof response["id"] === "string" && response["id"]) ||
           (engagement_id ?? "unknown");
-        logToolInvocation({
-          tool: "cortex_snapshot_register",
-          engagement_id,
-          project_name,
-          tier,
-        });
-        return envelopeContent(
-          codexEnvelope(
+        const __readEnv = codexEnvelope(
             response,
             codexProvenance({
               atomKind: "submission",
@@ -1392,8 +1557,15 @@ export function registerTools(server: McpServer) {
               sourcePath: "/api/snapshots",
             }),
             { tier },
-          ),
-        );
+          );
+        logToolInvocation({
+          tool: "cortex_snapshot_register",
+          engagement_id,
+          project_name,
+          tier,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_snapshot_register", err),
@@ -1441,7 +1613,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ snapshot_id, filename, ifc_base64 }) => {
-      const gate = requireProduct("cortex_ifc_ingest", "cortex");
+      const gate = requireProduct("cortex_ifc_ingest", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       let bytes: Buffer;
@@ -1464,15 +1636,7 @@ export function registerTools(server: McpServer) {
           bytes,
           contentType: "application/octet-stream",
         });
-        logToolInvocation({
-          tool: "cortex_ifc_ingest",
-          snapshot_id,
-          filename,
-          bytes: bytes.length,
-          tier,
-        });
-        return envelopeContent(
-          codexEnvelope(
+        const __readEnv = codexEnvelope(
             response,
             codexProvenance({
               atomKind: "submission",
@@ -1481,8 +1645,16 @@ export function registerTools(server: McpServer) {
               sourcePath: `/api/snapshots/${snapshot_id}/ifc`,
             }),
             { tier },
-          ),
-        );
+          );
+        logToolInvocation({
+          tool: "cortex_ifc_ingest",
+          snapshot_id,
+          filename,
+          bytes: bytes.length,
+          tier,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("cortex_ifc_ingest", err));
       }
@@ -1511,7 +1683,7 @@ export function registerTools(server: McpServer) {
         .describe("UUID of the engagement. Required."),
     },
     async ({ engagement_id }) => {
-      const gate = requireProduct("cortex_bim_model_query", "cortex");
+      const gate = requireProduct("cortex_bim_model_query", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1574,7 +1746,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ engagement_id, regenerate }) => {
-      const gate = requireProduct("cortex_briefing_emit", "cortex");
+      const gate = requireProduct("cortex_briefing_emit", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1582,15 +1754,7 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           regenerate,
         });
-        logToolInvocation({
-          tool: "cortex_briefing_emit",
-          engagement_id,
-          generation_id: response.generationId,
-          already_in_flight: response.alreadyInFlight ?? false,
-          tier,
-        });
-        return envelopeContent(
-          codexEnvelope(
+        const __readEnv = codexEnvelope(
             response,
             codexProvenance({
               atomKind: "brief-run",
@@ -1599,8 +1763,16 @@ export function registerTools(server: McpServer) {
               sourcePath: `/api/engagements/${engagement_id}/briefing/generate`,
             }),
             { tier },
-          ),
-        );
+          );
+        logToolInvocation({
+          tool: "cortex_briefing_emit",
+          engagement_id,
+          generation_id: response.generationId,
+          already_in_flight: response.alreadyInFlight ?? false,
+          tier,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_briefing_emit", err),
@@ -1679,7 +1851,7 @@ export function registerTools(server: McpServer) {
       actor_id,
       principal_actor_id,
     }) => {
-      const gate = requireProduct("cortex_response_task_create", "cortex");
+      const gate = requireProduct("cortex_response_task_create", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1693,19 +1865,19 @@ export function registerTools(server: McpServer) {
           actorId: actor_id,
           principalActorId: principal_actor_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.responseTask),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_response_task_create",
           engagement_id,
           response_task_id: response.responseTask.entityId,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.responseTask),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_response_task_create", err),
@@ -1731,10 +1903,7 @@ export function registerTools(server: McpServer) {
         .describe("Target state. Required."),
     },
     async ({ response_task_id, state }) => {
-      const gate = requireProduct(
-        "cortex_response_task_update_state",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_response_task_update_state", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1742,19 +1911,19 @@ export function registerTools(server: McpServer) {
           responseTaskId: response_task_id,
           state,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.responseTask),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_response_task_update_state",
           response_task_id,
           state,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.responseTask),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_response_task_update_state", err),
@@ -1781,7 +1950,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ engagement_id, state }) => {
-      const gate = requireProduct("cortex_response_task_list", "cortex");
+      const gate = requireProduct("cortex_response_task_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1789,20 +1958,20 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           state,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            response.responseTasks.map(lSurfaceProvenance),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_response_task_list",
           engagement_id,
           state,
           count: response.responseTasks.length,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            response.responseTasks.map(lSurfaceProvenance),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_response_task_list", err),
@@ -1828,7 +1997,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the finding to link the task to. Required."),
     },
     async ({ response_task_id, finding_id }) => {
-      const gate = requireProduct("cortex_response_task_link", "cortex");
+      const gate = requireProduct("cortex_response_task_link", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1836,19 +2005,19 @@ export function registerTools(server: McpServer) {
           responseTaskId: response_task_id,
           findingId: finding_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.responseTask),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_response_task_link",
           response_task_id,
           finding_id,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.responseTask),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_response_task_link", err),
@@ -1881,10 +2050,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ sheet_id }) => {
-      const gate = requireProduct(
-        "cortex_sheet_content_extraction_trigger",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_sheet_content_extraction_trigger", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1926,10 +2092,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId / blob ref of the sheet. Required."),
     },
     async ({ sheet_id }) => {
-      const gate = requireProduct(
-        "cortex_sheet_content_extraction_fetch",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_sheet_content_extraction_fetch", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1974,7 +2137,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ engagement_id, document_type }) => {
-      const gate = requireProduct("cortex_attached_document_list", "cortex");
+      const gate = requireProduct("cortex_attached_document_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1982,20 +2145,20 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           documentType: document_type,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            response.attachedDocuments.map(lSurfaceProvenance),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_attached_document_list",
           engagement_id,
           document_type,
           count: response.attachedDocuments.length,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            response.attachedDocuments.map(lSurfaceProvenance),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_attached_document_list", err),
@@ -2017,25 +2180,25 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the attached-document atom. Required."),
     },
     async ({ attached_document_id }) => {
-      const gate = requireProduct("cortex_attached_document_fetch", "cortex");
+      const gate = requireProduct("cortex_attached_document_fetch", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
         const response = await legacyClient.fetchAttachedDocument({
           attachedDocumentId: attached_document_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.attachedDocument),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_attached_document_fetch",
           attached_document_id,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.attachedDocument),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_attached_document_fetch", err),
@@ -2109,7 +2272,7 @@ export function registerTools(server: McpServer) {
       actor_id,
       principal_actor_id,
     }) => {
-      const gate = requireProduct("cortex_deliverable_letter_create", "cortex");
+      const gate = requireProduct("cortex_deliverable_letter_create", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2121,20 +2284,20 @@ export function registerTools(server: McpServer) {
           actorId: actor_id,
           principalActorId: principal_actor_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.deliverableLetter),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_deliverable_letter_create",
           engagement_id,
           letter_id: response.deliverableLetter.entityId,
           section_count: response.deliverableLetter.sections.length,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.deliverableLetter),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_deliverable_letter_create", err),
@@ -2170,10 +2333,7 @@ export function registerTools(server: McpServer) {
       content: z.string().describe("Section body text. Required."),
     },
     async ({ letter_id, section_index, kind, heading, content }) => {
-      const gate = requireProduct(
-        "cortex_deliverable_letter_update_section",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_deliverable_letter_update_section", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2184,20 +2344,20 @@ export function registerTools(server: McpServer) {
           heading,
           content,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.deliverableLetter),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_deliverable_letter_update_section",
           letter_id,
           section_index,
           kind,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.deliverableLetter),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure(
@@ -2252,10 +2412,7 @@ export function registerTools(server: McpServer) {
       finding_ids,
       adjudication_state_ids,
     }) => {
-      const gate = requireProduct(
-        "cortex_deliverable_letter_attach_provenance",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_deliverable_letter_attach_provenance", "reporting");
       if (!gate.ok) return gate.content;
       if (
         response_task_ids === undefined &&
@@ -2277,19 +2434,19 @@ export function registerTools(server: McpServer) {
           findingIds: finding_ids,
           adjudicationStateIds: adjudication_state_ids,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.deliverableLetter),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_deliverable_letter_attach_provenance",
           letter_id,
           section_index,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.deliverableLetter),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure(
@@ -2315,10 +2472,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the deliverable letter. Required."),
     },
     async ({ letter_id }) => {
-      const gate = requireProduct(
-        "cortex_deliverable_letter_completeness_check",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_deliverable_letter_completeness_check", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2361,25 +2515,25 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the deliverable letter to send. Required."),
     },
     async ({ letter_id }) => {
-      const gate = requireProduct("cortex_deliverable_letter_send", "cortex");
+      const gate = requireProduct("cortex_deliverable_letter_send", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
         const response = await legacyClient.sendDeliverableLetter({
           letterId: letter_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.deliverableLetter),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_deliverable_letter_send",
           letter_id,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.deliverableLetter),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         // A 409 here is the completeness gate. Surface the missing
         // sections clearly so the agent knows what to add before retry.
@@ -2476,7 +2630,7 @@ export function registerTools(server: McpServer) {
       actor_id,
       principal_actor_id,
     }) => {
-      const gate = requireProduct("cortex_detail_callout_spec_create", "cortex");
+      const gate = requireProduct("cortex_detail_callout_spec_create", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2489,20 +2643,20 @@ export function registerTools(server: McpServer) {
           actorId: actor_id,
           principalActorId: principal_actor_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.detailCalloutSpec),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_detail_callout_spec_create",
           engagement_id,
           detail_type,
           spec_id: response.detailCalloutSpec.entityId,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.detailCalloutSpec),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_detail_callout_spec_create", err),
@@ -2528,10 +2682,7 @@ export function registerTools(server: McpServer) {
         .describe("Target push state. Required."),
     },
     async ({ spec_id, push_state }) => {
-      const gate = requireProduct(
-        "cortex_detail_callout_spec_update_push_state",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_detail_callout_spec_update_push_state", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2539,19 +2690,19 @@ export function registerTools(server: McpServer) {
           specId: spec_id,
           pushState: push_state,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.detailCalloutSpec),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_detail_callout_spec_update_push_state",
           spec_id,
           push_state,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.detailCalloutSpec),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         // A 409 here is the illegal-transition gate. Surface the legal
         // next states so the agent can pick a valid transition.
@@ -2610,10 +2761,7 @@ export function registerTools(server: McpServer) {
         .describe("Opaque APS Design Automation work-item reference. Required."),
     },
     async ({ spec_id, aps_task_ref }) => {
-      const gate = requireProduct(
-        "cortex_detail_callout_spec_attach_aps_ref",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_detail_callout_spec_attach_aps_ref", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2621,18 +2769,18 @@ export function registerTools(server: McpServer) {
           specId: spec_id,
           apsTaskRef: aps_task_ref,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.detailCalloutSpec),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_detail_callout_spec_attach_aps_ref",
           spec_id,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.detailCalloutSpec),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure(
@@ -2660,7 +2808,7 @@ export function registerTools(server: McpServer) {
         .describe("Optional push-state filter. Omit to list specs in every state."),
     },
     async ({ engagement_id, push_state }) => {
-      const gate = requireProduct("cortex_detail_callout_spec_list", "cortex");
+      const gate = requireProduct("cortex_detail_callout_spec_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2668,20 +2816,20 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           pushState: push_state,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            response.detailCalloutSpecs.map(lSurfaceProvenance),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_detail_callout_spec_list",
           engagement_id,
           push_state,
           count: response.detailCalloutSpecs.length,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            response.detailCalloutSpecs.map(lSurfaceProvenance),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_detail_callout_spec_list", err),
@@ -2703,25 +2851,25 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the detail-callout spec. Required."),
     },
     async ({ spec_id }) => {
-      const gate = requireProduct("cortex_detail_callout_spec_get", "cortex");
+      const gate = requireProduct("cortex_detail_callout_spec_get", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
         const response = await legacyClient.getDetailCalloutSpec({
           specId: spec_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.detailCalloutSpec),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_detail_callout_spec_get",
           spec_id,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.detailCalloutSpec),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_detail_callout_spec_get", err),
@@ -2798,10 +2946,7 @@ export function registerTools(server: McpServer) {
       actor_id,
       principal_actor_id,
     }) => {
-      const gate = requireProduct(
-        "cortex_product_spec_reference_create",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_product_spec_reference_create", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2814,20 +2959,20 @@ export function registerTools(server: McpServer) {
           actorId: actor_id,
           principalActorId: principal_actor_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.productSpecReference),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_product_spec_reference_create",
           engagement_id,
           esr_number,
           reference_id: response.productSpecReference.entityId,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.productSpecReference),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_product_spec_reference_create", err),
@@ -2851,29 +2996,26 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the product-spec reference to refresh. Required."),
     },
     async ({ reference_id }) => {
-      const gate = requireProduct(
-        "cortex_product_spec_reference_refresh_status",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_product_spec_reference_refresh_status", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
         const response = await legacyClient.refreshProductSpecReferenceStatus({
           referenceId: reference_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.productSpecReference),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_product_spec_reference_refresh_status",
           reference_id,
           status: response.productSpecReference.status,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.productSpecReference),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure(
@@ -2902,10 +3044,7 @@ export function registerTools(server: McpServer) {
         .describe("Optional ICC-ES status filter. Omit to list references in every status."),
     },
     async ({ engagement_id, status }) => {
-      const gate = requireProduct(
-        "cortex_product_spec_reference_list",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_product_spec_reference_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2913,20 +3052,20 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           status,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            response.productSpecReferences.map(lSurfaceProvenance),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_product_spec_reference_list",
           engagement_id,
           status,
           count: response.productSpecReferences.length,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            response.productSpecReferences.map(lSurfaceProvenance),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_product_spec_reference_list", err),
@@ -2948,25 +3087,25 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the product-spec reference. Required."),
     },
     async ({ reference_id }) => {
-      const gate = requireProduct("cortex_product_spec_reference_get", "cortex");
+      const gate = requireProduct("cortex_product_spec_reference_get", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
         const response = await legacyClient.getProductSpecReference({
           referenceId: reference_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.productSpecReference),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_product_spec_reference_get",
           reference_id,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.productSpecReference),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_product_spec_reference_get", err),
@@ -3010,7 +3149,7 @@ export function registerTools(server: McpServer) {
         .describe("Actor who triggered the render (ADR-015). Omit for system renders."),
     },
     async ({ letter_id, format, rendered_by_actor_id }) => {
-      const gate = requireProduct("cortex_deliverable_letter_render", "cortex");
+      const gate = requireProduct("cortex_deliverable_letter_render", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3019,20 +3158,20 @@ export function registerTools(server: McpServer) {
           format,
           renderedByActorId: rendered_by_actor_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.render),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_deliverable_letter_render",
           letter_id,
           format,
           render_id: response.render.entityId,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.render),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         // A 409 here is the completeness gate (same shape as
         // cortex_deliverable_letter_send). Surface the missing sections.
@@ -3076,29 +3215,26 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the deliverable letter. Required."),
     },
     async ({ letter_id }) => {
-      const gate = requireProduct(
-        "cortex_deliverable_letter_renders_list",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_deliverable_letter_renders_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
         const response = await legacyClient.listDeliverableLetterRenders({
           letterId: letter_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            response.renders.map(lSurfaceProvenance),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_deliverable_letter_renders_list",
           letter_id,
           count: response.renders.length,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            response.renders.map(lSurfaceProvenance),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure(
@@ -3139,7 +3275,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ engagement_id, status }) => {
-      const gate = requireProduct("cortex_deliverable_letter_list", "cortex");
+      const gate = requireProduct("cortex_deliverable_letter_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3147,20 +3283,20 @@ export function registerTools(server: McpServer) {
           engagementId: engagement_id,
           status,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            response.deliverableLetters.map(lSurfaceProvenance),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_deliverable_letter_list",
           engagement_id,
           status,
           count: response.deliverableLetters.length,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            response.deliverableLetters.map(lSurfaceProvenance),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_deliverable_letter_list", err),
@@ -3181,25 +3317,25 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the deliverable letter. Required."),
     },
     async ({ letter_id }) => {
-      const gate = requireProduct("cortex_deliverable_letter_fetch", "cortex");
+      const gate = requireProduct("cortex_deliverable_letter_fetch", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
         const response = await legacyClient.getDeliverableLetter({
           letterId: letter_id,
         });
+        const __readEnv = codexEnvelope(
+            response,
+            lSurfaceProvenance(response.deliverableLetter),
+            { tier },
+          );
         logToolInvocation({
           tool: "cortex_deliverable_letter_fetch",
           letter_id,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          codexEnvelope(
-            response,
-            lSurfaceProvenance(response.deliverableLetter),
-            { tier },
-          ),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(
           describeLegacyFailure("cortex_deliverable_letter_fetch", err),
@@ -3224,10 +3360,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ render_id }) => {
-      const gate = requireProduct(
-        "cortex_deliverable_letter_render_download",
-        "cortex",
-      );
+      const gate = requireProduct("cortex_deliverable_letter_render_download", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3240,17 +3373,44 @@ export function registerTools(server: McpServer) {
           content_type: download.contentType,
           byte_length: download.bytes.byteLength,
           tier,
+          atom_ids: [`did:hauska:deliverable-letter-render:${render_id}`],
         });
+        const metaEnvelope = finalizeReadEnvelope(
+          "cortex_deliverable_letter_render_download",
+          buildEnvelope(
+            {
+              render_id,
+              filename: download.filename,
+              content_type: download.contentType,
+              byte_length: download.bytes.byteLength,
+            },
+            [
+              {
+                did: `did:hauska:deliverable-letter-render:${render_id}`,
+                entityType: "deliverable-letter-render",
+                entityId: render_id,
+                jurisdictionTenant: "brokerage",
+                contentHash: null,
+                cidNote:
+                  "Binary body returned as MCP resource; metadata summary is read-contract-shaped.",
+                source: {
+                  adapter: "legacy-design-tools",
+                  url: "/api/engagements/deliverable-letters/renders/download",
+                  fetchedAt: new Date().toISOString(),
+                },
+              },
+            ],
+            { tier, readKind: "legacy-deterministic" },
+          ),
+        );
         return {
           content: [
             {
               type: "text" as const,
               text: JSON.stringify(
                 {
-                  render_id,
-                  filename: download.filename,
-                  content_type: download.contentType,
-                  byte_length: download.bytes.byteLength,
+                  ...metaEnvelope,
+                  resource_uri: `cortex://deliverable-letter-render/${render_id}/${download.filename}`,
                 },
                 null,
                 2,
@@ -3299,7 +3459,7 @@ export function registerTools(server: McpServer) {
         .describe("Brief voice: consumer (lay) or pro."),
     },
     async ({ address, mls_id, source, presentation_mode }) => {
-      const gate = requireProduct("generate_property_brief", "cortex");
+      const gate = requireProduct("generate_property_brief", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       const started = Date.now();
@@ -3310,6 +3470,7 @@ export function registerTools(server: McpServer) {
           source,
           presentationMode: presentation_mode,
         });
+        const __readEnv = generateBriefEnvelope(response, { tier });
         logToolInvocation({
           tool: "generate_property_brief",
           tier,
@@ -3317,8 +3478,9 @@ export function registerTools(server: McpServer) {
           jurisdiction_key: response.jurisdiction ?? undefined,
           latency_ms: Date.now() - started,
           atom_ids_returned: (response.atoms?.inlineRefs?.length ?? 0) + 1,
+          envelope: __readEnv,
         });
-        return envelopeContent(generateBriefEnvelope(response, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         logToolInvocation({
           tool: "generate_property_brief",
@@ -3341,17 +3503,19 @@ export function registerTools(server: McpServer) {
         .describe("brief-run id from generate_property_brief. Required."),
     },
     async ({ run_id }) => {
-      const gate = requireProduct("get_property_brief_run", "cortex");
+      const gate = requireProduct("get_property_brief_run", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
         const response = await legacyClient.getBriefRun({ runId: run_id });
+        const __readEnv = getBriefRunEnvelope(response, { tier });
         logToolInvocation({
           tool: "get_property_brief_run",
           run_id,
           tier,
+          envelope: __readEnv,
         });
-        return envelopeContent(getBriefRunEnvelope(response, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_property_brief_run", err));
       }
@@ -3394,7 +3558,7 @@ export function registerTools(server: McpServer) {
       return_period_years,
       force_refresh,
     }) => {
-      const gate = requireProduct("simulate_site_drainage", "cortex");
+      const gate = requireProduct("simulate_site_drainage", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3404,14 +3568,7 @@ export function registerTools(server: McpServer) {
           returnPeriodYears: return_period_years,
           forceRefresh: force_refresh,
         });
-        logToolInvocation({
-          tool: "simulate_site_drainage",
-          engagement_id,
-          tier,
-          flow_line_count: response.flowLineCount,
-        });
-        return envelopeContent(
-          codexEnvelope(
+        const __readEnv = codexEnvelope(
             response,
             response.materializableElementId
               ? {
@@ -3430,8 +3587,15 @@ export function registerTools(server: McpServer) {
                 }
               : null,
             { tier },
-          ),
-        );
+          );
+        logToolInvocation({
+          tool: "simulate_site_drainage",
+          engagement_id,
+          tier,
+          flow_line_count: response.flowLineCount,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("simulate_site_drainage", err));
       }
@@ -3450,7 +3614,7 @@ export function registerTools(server: McpServer) {
         .describe("When true, attach NOAA Atlas 14 design-storm estimates."),
     },
     async ({ engagement_id, include_design_storms }) => {
-      const gate = requireProduct("get_site_drainage", "cortex");
+      const gate = requireProduct("get_site_drainage", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3462,21 +3626,25 @@ export function registerTools(server: McpServer) {
               engagementId: engagement_id,
             })
           : undefined;
+        const baseEnv = siteDrainageEnvelope(drainage, engagement_id, { tier });
+        const __readEnv =
+          designStorms !== undefined
+            ? ({
+                ...baseEnv,
+                data: { drainage, designStorms },
+              } as ToolEnvelope<{
+                drainage: typeof drainage;
+                designStorms: typeof designStorms;
+              }>)
+            : baseEnv;
         logToolInvocation({
           tool: "get_site_drainage",
           engagement_id,
           tier,
           include_design_storms,
+          envelope: __readEnv,
         });
-        const envelope = siteDrainageEnvelope(drainage, engagement_id, { tier });
-        if (designStorms !== undefined) {
-          return envelopeContent({
-            data: { drainage, designStorms },
-            atoms: envelope.atoms,
-            meta: envelope.meta,
-          });
-        }
-        return envelopeContent(envelope);
+        return envelopeContent(__readEnv as ToolEnvelope<unknown>);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_site_drainage", err));
       }
@@ -3499,7 +3667,7 @@ export function registerTools(server: McpServer) {
         .describe("Passed to refresh when refresh=true."),
     },
     async ({ engagement_id, refresh, force_refresh }) => {
-      const gate = requireProduct("get_site_topography", "cortex");
+      const gate = requireProduct("get_site_topography", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3512,15 +3680,15 @@ export function registerTools(server: McpServer) {
         const response = await legacyClient.getSiteTopography({
           engagementId: engagement_id,
         });
+        const __readEnv = siteTopographyEnvelope(response, engagement_id, { tier });
         logToolInvocation({
           tool: "get_site_topography",
           engagement_id,
           tier,
           refreshed: refresh,
+          envelope: __readEnv,
         });
-        return envelopeContent(
-          siteTopographyEnvelope(response, engagement_id, { tier }),
-        );
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_site_topography", err));
       }
@@ -3543,21 +3711,23 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ workspace_did }) => {
-      const gate = requireProduct("search_encumbrances", "cortex");
+      const gate = requireProduct("search_encumbrances", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
         const response = await legacyClient.searchEncumbrances({
           workspaceDid: workspace_did,
         });
+        const __readEnv = encumbrancesEnvelope(response, { tier });
         logToolInvocation({
           tool: "search_encumbrances",
           workspace_did,
           tier,
           instrument_count: response.instruments.length,
           clause_count: response.clauses.length,
+          envelope: __readEnv,
         });
-        return envelopeContent(encumbrancesEnvelope(response, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("search_encumbrances", err));
       }
@@ -3574,20 +3744,22 @@ export function registerTools(server: McpServer) {
         .describe("Property workspace DID. Required."),
     },
     async ({ workspace_did }) => {
-      const gate = requireProduct("get_restrictions", "cortex");
+      const gate = requireProduct("get_restrictions", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
         const response = await legacyClient.getRestrictions({
           workspaceDid: workspace_did,
         });
+        const __readEnv = restrictionsEnvelope(response, { tier });
         logToolInvocation({
           tool: "get_restrictions",
           workspace_did,
           tier,
           clause_count: response.clauses.length,
+          envelope: __readEnv,
         });
-        return envelopeContent(restrictionsEnvelope(response, { tier }));
+        return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_restrictions", err));
       }
@@ -3620,16 +3792,29 @@ export function registerTools(server: McpServer) {
         "status" in response &&
         response.status === "credential-pending"
       ) {
-        logToolInvocation({ tool, tier, credential_pending: true });
-        return envelopeContent(
-          credentialPendingEnvelope(
+        const __readEnv = credentialPendingEnvelope(
             response as import("./legacy-client.js").CredentialPendingResponse,
-            { tier },
-          ),
-        );
+            { tier, note: "Cotality quartet: atoms[] empty until CoreLogic OAuth materializes adapter atoms." },
+          );
+        logToolInvocation({
+          tool,
+          tier,
+          credential_pending: true,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
       }
-      logToolInvocation({ tool, tier, credential_pending: false });
-      return envelopeContent(codexEnvelope(response, null, { tier }));
+      const __readEnv = codexEnvelope(response, [], {
+        tier,
+        note: "Cotality adapter response — atoms[] empty until OAuth materializes Cotality atoms on the wire.",
+      });
+      logToolInvocation({
+        tool,
+        tier,
+        credential_pending: false,
+        envelope: __readEnv,
+      });
+      return envelopeContent(__readEnv);
     });
   }
 
@@ -3638,7 +3823,7 @@ export function registerTools(server: McpServer) {
     TOOL_COPY.get_property_detail,
     cotalityLocationSchema,
     async ({ address, lat, lng }) => {
-      const gate = requireProduct("get_property_detail", "cortex");
+      const gate = requireProduct("get_property_detail", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3658,7 +3843,7 @@ export function registerTools(server: McpServer) {
     TOOL_COPY.get_replacement_cost,
     cotalityLocationSchema,
     async ({ address, lat, lng }) => {
-      const gate = requireProduct("get_replacement_cost", "cortex");
+      const gate = requireProduct("get_replacement_cost", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3678,7 +3863,7 @@ export function registerTools(server: McpServer) {
     TOOL_COPY.get_hazard_profile,
     cotalityLocationSchema,
     async ({ address, lat, lng }) => {
-      const gate = requireProduct("get_hazard_profile", "cortex");
+      const gate = requireProduct("get_hazard_profile", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3698,7 +3883,7 @@ export function registerTools(server: McpServer) {
     TOOL_COPY.get_parcel_polygon,
     cotalityLocationSchema,
     async ({ address, lat, lng }) => {
-      const gate = requireProduct("get_parcel_polygon", "cortex");
+      const gate = requireProduct("get_parcel_polygon", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3713,7 +3898,7 @@ export function registerTools(server: McpServer) {
     },
   );
 
-  // ----- Adaptive interface. Gate: product='cortex' (cortex-api reporting function). -----
+  // ----- Adaptive interface. Gate: product='reporting' (cortex-api reporting function). -----
   server.tool(
     "compose_workspace",
     TOOL_COPY.compose_workspace,
@@ -3746,7 +3931,7 @@ export function registerTools(server: McpServer) {
         .describe("Max tiles to include, default 4."),
     },
     async ({ intent, engagement_id, available_tile_ids, max_tiles }) => {
-      const gate = requireProduct("compose_workspace", "cortex");
+      const gate = requireProduct("compose_workspace", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3809,6 +3994,239 @@ export function registerTools(server: McpServer) {
         };
       } catch (err) {
         return errorContent(describeLegacyFailure("compose_workspace", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Map tool: assemble_map_layers (engine-api gate-front proxy).
+  // -----------------------------------------------------------------
+  server.tool(
+    "assemble_map_layers",
+    TOOL_COPY.assemble_map_layers,
+    {
+      parcel: mapLayersParcelSchema,
+      jurisdiction: mapLayersJurisdictionSchema,
+      layers: z.array(mapLayerKeySchema).optional(),
+      force_refresh: z.boolean().optional(),
+      bbox: mapLayersBboxSchema.optional(),
+    },
+    async ({ parcel, jurisdiction, layers, force_refresh, bbox }) => {
+      const gate = requireProduct("assemble_map_layers", "map");
+      if (!gate.ok) return gate.content;
+      const pkgGate = assertMapLayersPackageGate("assemble_map_layers");
+      if (!pkgGate.ok) return errorContent(pkgGate.message);
+      const subject = getCurrentAccessSubject();
+      const layerFilter = filterLayersForEntitlement(layers, subject);
+      if (!layerFilter.ok) return errorContent(layerFilter.message);
+      const tenantScope = assertJurisdictionTenantScope(
+        "assemble_map_layers",
+        jurisdiction,
+        subject,
+      );
+      if (!tenantScope.ok) return errorContent(tenantScope.message);
+      const tier = getCurrentTier();
+      try {
+        const engineEnvelope = await engineApiClient.assembleMapLayers(
+          {
+            parcel,
+            jurisdiction,
+            layers: layerFilter.layers,
+            forceRefresh: force_refresh,
+            bbox,
+          },
+          pkgGate,
+        );
+        const scopeCheck = assertResponseTenantScope(
+          "assemble_map_layers",
+          engineEnvelope.payload.tenantScope,
+          subject,
+        );
+        if (!scopeCheck.ok) return errorContent(scopeCheck.message);
+        const __readEnv = finalizeReadEnvelope(
+          "assemble_map_layers",
+          buildEnvelope(engineEnvelope.payload, [], {
+            tier,
+            readKind: "catalog",
+          }),
+        );
+        logToolInvocation({
+          tool: "assemble_map_layers",
+          tier,
+          layer_count: engineEnvelope.payload.layers.length,
+          tenant_scope: engineEnvelope.payload.tenantScope,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Map layer assembly requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          return errorContent(
+            `Engine API rejected map layer assembly (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking assemble_map_layers: ${String(err).slice(0, 200)}`,
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // atom_export — DownloadableAtom (accessPolicy-gated).
+  // -----------------------------------------------------------------
+  server.tool(
+    "atom_export",
+    TOOL_COPY.atom_export,
+    {
+      atom_id: z
+        .string()
+        .regex(ATOM_DID_REGEX)
+        .describe("Atom DID to export. Required."),
+      include_trace: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe("When true, enrich export with atom_trace graph data."),
+    },
+    async ({ atom_id, include_trace }) => {
+      const gate = requireProduct("atom_export", "reporting");
+      if (!gate.ok) return gate.content;
+      const identity = requireIdentifiedCaller("atom_export");
+      if (!identity.ok) return identity.content;
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      try {
+        const getAtom = await hauskaClient.getAtom({
+          atomDid: atom_id,
+          includeComposition: true,
+        });
+        if (!getAtom.atom || !assertAtomReadable("atom_export", getAtom.atom)) {
+          return errorContent(
+            `atom_export: atom ${atom_id} not found or not readable under caller access policy.`,
+          );
+        }
+        const trace =
+          include_trace ?
+            await hauskaClient.getAtomTrace({ atomDid: atom_id, audience: "ai" })
+          : null;
+        const readEnv = getAtomEnvelope(getAtom, { tier });
+        const outcome = assembleDownloadableAtomExport({
+          atomDid: atom_id,
+          getAtom,
+          trace: trace as import("./atom-export.js").AtomTraceWire | null,
+          readContract: readEnv.readContract,
+          subject,
+        });
+        if (!outcome.ok) {
+          return errorContent(
+            `atom_export conformance failed: ${outcome.errors.map((e) => e.message).join("; ")}`,
+          );
+        }
+        const __readEnv = buildEnvelope(
+          { export: outcome.export },
+          [],
+          { tier, readKind: "catalog" },
+        );
+        logToolInvocation({
+          tool: "atom_export",
+          atom_id,
+          requester_key_id: identity.requesterKeyId,
+          tier,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        return errorContent(describeEngineFailure("atom_export", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // read_atom_calibration — calibration overlay read-contract-per-atom.
+  // -----------------------------------------------------------------
+  server.tool(
+    "read_atom_calibration",
+    TOOL_COPY.read_atom_calibration,
+    {
+      atom_id: z
+        .string()
+        .regex(ATOM_DID_REGEX)
+        .describe("Atom DID for overlay read-contract. Required."),
+    },
+    async ({ atom_id }) => {
+      const gate = requireProduct("read_atom_calibration", "reporting");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      const ctx = getCurrentAuthContext();
+      const gateProduct = gateFrontProductFor("reporting");
+      const accessTier = resolveGateAccessTier(ctx);
+      const tenantId = resolveGateTenantId(ctx);
+      let overlayReadContract: unknown | undefined;
+      if (gateProduct && accessTier && tenantId && ctx?.key_id) {
+        try {
+          const overlay = await engineApiClient.readAtomCalibration(atom_id, {
+            gateProduct,
+            accessTier,
+            tenantId,
+            gateCredentialId: ctx.key_id,
+          });
+          overlayReadContract = overlay.readContract;
+        } catch (err) {
+          if (
+            !(
+              err instanceof EngineApiHttpError &&
+              (err.status === 404 || err.status === 501)
+            )
+          ) {
+            logger.warn("read_atom_calibration_overlay_miss", {
+              atom_id,
+              error: String(err).slice(0, 200),
+            });
+          }
+        }
+      }
+      try {
+        const getAtom = await hauskaClient.getAtom({ atomDid: atom_id });
+        if (!getAtom.atom || !assertAtomReadable("read_atom_calibration", getAtom.atom)) {
+          return errorContent(`read_atom_calibration: atom ${atom_id} not readable.`);
+        }
+        const base = getAtomEnvelope(getAtom, { tier });
+        const readContract = overlayReadContract ?? base.readContract;
+        const __readEnv = finalizeReadEnvelope(
+          "read_atom_calibration",
+          buildEnvelope(
+            {
+              atom_id,
+              readContract,
+              overlay_available: overlayReadContract !== undefined,
+            },
+            base.atoms,
+            {
+              tier,
+              readKind: overlayReadContract ? "model-assisted" : "catalog",
+              note:
+                overlayReadContract ?
+                  undefined
+                : "Calibration overlay route not available — returning catalog read-contract.",
+            },
+          ),
+          getAtom.atom.accessPolicy as import("@hauska/atom-contract").AccessPolicy | undefined,
+        );
+        logToolInvocation({
+          tool: "read_atom_calibration",
+          atom_id,
+          tier,
+          overlay_available: overlayReadContract !== undefined,
+          envelope: __readEnv,
+        });
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        return errorContent(describeEngineFailure("read_atom_calibration", err));
       }
     },
   );

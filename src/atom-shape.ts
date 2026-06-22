@@ -15,6 +15,16 @@
 // "Powered by Hauska Engine — hauska.dev" verbatim per the brand
 // convention. The em dash is intentional in this string; internal prose
 // stays em-dash-free per CLAUDE.md.
+//
+// F4 (Calibrated Spine): every read envelope carries a
+// @hauska/atom-contract read-contract object alongside provenance.
+
+import type { ReadContract } from "@hauska/atom-contract/read-contract";
+
+import {
+  buildReadContract,
+  type ReadContractKind,
+} from "./read-contract-bridge.js";
 
 import type {
   AtomInstanceBase,
@@ -114,6 +124,7 @@ export function provenanceFromAtom(
 export interface ToolEnvelope<T> {
   data: T;
   atoms: AtomProvenanceEntry[];
+  readContract: ReadContract;
   meta: {
     attribution?: string;
     note?: string;
@@ -125,10 +136,18 @@ export interface BuildEnvelopeOptions {
   tier: "free_anonymous" | "free" | "developer_pro" | "team" | "embedder";
   /** Optional human note (e.g. "Bastrop corpus not yet loaded"). */
   note?: string;
+  /** Read-contract assembly kind (F4). Defaults from atom count. */
+  readKind?: ReadContractKind;
+  /** Mean retrieval score for catalog reads (search). */
+  avgScore?: number;
 }
 
 function isFreeTier(tier: BuildEnvelopeOptions["tier"]): boolean {
   return tier === "free_anonymous" || tier === "free";
+}
+
+function defaultReadKind(atomCount: number): ReadContractKind {
+  return atomCount > 0 ? "catalog" : "empty";
 }
 
 export function buildEnvelope<T>(
@@ -139,7 +158,13 @@ export function buildEnvelope<T>(
   const meta: ToolEnvelope<T>["meta"] = {};
   if (isFreeTier(options.tier)) meta.attribution = ATTRIBUTION_STRING;
   if (options.note) meta.note = options.note;
-  return { data, atoms, meta };
+  const readKind = options.readKind ?? defaultReadKind(atoms.length);
+  const readContract = buildReadContract({
+    kind: readKind,
+    atomCount: atoms.length,
+    avgScore: options.avgScore,
+  });
+  return { data, atoms, readContract, meta };
 }
 
 // -----------------------------------------------------------------
@@ -150,11 +175,17 @@ export function searchAtomsEnvelope(
   response: SearchResponse,
   options: BuildEnvelopeOptions,
 ): ToolEnvelope<SearchResponse> {
-  return buildEnvelope(
-    response,
-    response.results.map(provenanceFromSearchResult),
-    options,
-  );
+  const atoms = response.results.map(provenanceFromSearchResult);
+  const scores = response.results.map((r) => r.score).filter((s) => s > 0);
+  const avgScore =
+    scores.length > 0
+      ? scores.reduce((a, b) => a + b, 0) / scores.length
+      : undefined;
+  return buildEnvelope(response, atoms, {
+    ...options,
+    readKind: "catalog",
+    avgScore,
+  });
 }
 
 export function getAtomEnvelope(
@@ -169,6 +200,27 @@ export function getAtomEnvelope(
     }
   }
   return buildEnvelope(response, atoms, options);
+}
+
+export function atomTraceEnvelope(
+  trace: import("./hauska-client.js").AtomTraceResponse | null,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<import("./hauska-client.js").AtomTraceResponse | null> {
+  if (!trace) {
+    return buildEnvelope(null, [], {
+      ...options,
+      readKind: "empty",
+      note: "No trace found for atom DID.",
+    });
+  }
+  const atoms: AtomProvenanceEntry[] = [provenanceFromAtom(trace.atom)];
+  for (const edge of [...trace.outbound, ...trace.inbound]) {
+    if (edge.atom) atoms.push(provenanceFromAtom(edge.atom));
+  }
+  return buildEnvelope(trace, atoms, {
+    ...options,
+    readKind: "catalog",
+  });
 }
 
 export function listJurisdictionsEnvelope(
@@ -294,7 +346,10 @@ export function codexEnvelope<T>(
       : Array.isArray(provenance)
         ? [...provenance]
         : [provenance as AtomProvenanceEntry];
-  return buildEnvelope(data, atoms, options);
+  return buildEnvelope(data, atoms, {
+    ...options,
+    readKind: options.readKind ?? "legacy-deterministic",
+  });
 }
 
 // -----------------------------------------------------------------
@@ -396,7 +451,7 @@ export function resolvePlaceEnvelope(
   response: ResolvePlaceResponse,
   options: BuildEnvelopeOptions,
 ): ToolEnvelope<ResolvePlaceResponse> {
-  return buildEnvelope(response, [], options);
+  return buildEnvelope(response, [], { ...options, readKind: "empty" });
 }
 
 export function getPlaceLayersEnvelope(
@@ -425,7 +480,49 @@ export function getPlaceDossierEnvelope(
   response: GetPlaceDossierResponse,
   options: BuildEnvelopeOptions,
 ): ToolEnvelope<GetPlaceDossierResponse> {
-  return buildEnvelope(response, [], options);
+  const atoms: AtomProvenanceEntry[] = [];
+  for (const layer of response.layers ?? []) {
+    const atomDid =
+      typeof layer === "object" &&
+      layer !== null &&
+      typeof (layer as { atomDid?: unknown }).atomDid === "string"
+        ? (layer as { atomDid: string }).atomDid
+        : null;
+    if (atomDid) {
+      atoms.push({
+        did: atomDid,
+        entityType: "place-layer",
+        entityId: atomDid.replace(/^did:hauska:[^:]+:/, ""),
+        jurisdictionTenant: response.jurisdiction_key,
+        contentHash: null,
+        cidNote: CID_NOTE,
+        source: { adapter: "place-dossier", url: null, fetchedAt: null },
+      });
+    }
+  }
+  for (const ref of response.inlineRefs ?? []) {
+    const did =
+      typeof ref === "object" &&
+      ref !== null &&
+      typeof (ref as { did?: unknown }).did === "string"
+        ? (ref as { did: string }).did
+        : null;
+    if (did) {
+      atoms.push({
+        did,
+        entityType: "inline-ref",
+        entityId: did.replace(/^did:hauska:[^:]+:/, ""),
+        jurisdictionTenant: response.jurisdiction_key,
+        contentHash: null,
+        cidNote: CID_NOTE,
+        source: { adapter: "place-dossier", url: null, fetchedAt: null },
+      });
+    }
+  }
+  return buildEnvelope(response, atoms, {
+    ...options,
+    readKind: atoms.length > 0 ? "legacy-deterministic" : "empty",
+  });
 }
 
 // -----------------------------------------------------------------
@@ -653,6 +750,7 @@ export function credentialPendingEnvelope(
 ): ToolEnvelope<CredentialPendingResponse> {
   return buildEnvelope(response, [], {
     ...options,
+    readKind: "empty",
     note: response.message,
   });
 }

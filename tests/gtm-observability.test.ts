@@ -25,7 +25,7 @@ test("isExternalCaller treats unlisted hashes as external", () => {
   }
 });
 
-test("logToolInvocation adds key_hash and is_external", () => {
+test("logToolInvocation adds key_hash, is_external, and atom_ids from envelope", () => {
   requestContext.run(
     {
       tier: "free",
@@ -40,7 +40,12 @@ test("logToolInvocation adds key_hash and is_external", () => {
       logToolInvocation({
         tool: "search_atoms",
         jurisdiction_key: "bastrop-tx",
-        atom_ids_returned: 2,
+        envelope: {
+          atoms: [
+            { did: "did:hauska:code-section:a" },
+            { did: "did:hauska:code-section:b" },
+          ],
+        },
       });
     },
   );
@@ -51,6 +56,10 @@ test("logToolInvocation adds key_hash and is_external", () => {
   assert.equal(e!.key_hash, "hash-test-1");
   assert.equal(e!.is_external, true);
   assert.equal(e!.jurisdiction_key, "bastrop-tx");
+  assert.deepEqual(e!.atom_ids, [
+    "did:hauska:code-section:a",
+    "did:hauska:code-section:b",
+  ]);
   assert.equal(e!.atom_ids_returned, 2);
 });
 
