@@ -120,4 +120,8 @@ export const TOOL_COPY = {
   get_parcel_polygon:
     "Cotality parcel-polygon adapter (DESIGNED, INERT until CoreLogic OAuth clears). " +
     CORTEX_TIER,
+
+  compose_workspace:
+    "Select and arrange Hauska cortex workspace tiles from a natural-language intent. Reads the live tile capability registry, filters to tiles whose requirements are satisfied by the engagement (when engagement_id is given), keyword-ranks against the intent, and returns a WorkspaceComposition { tiles, layoutId, engagementId?, why } that can be passed directly to the @hauska/tile-shell CortexShell. " +
+    CORTEX_TIER,
 } as const;

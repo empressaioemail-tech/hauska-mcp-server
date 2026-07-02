@@ -170,6 +170,38 @@ export type SubmissionDiscipline =
   | "zoning"
   | "civil";
 
+// -----------------------------------------------------------------
+// Cortex tile capability registry wire type.
+// GET /api/plan-review/admin/tile-registry returns a JSON array of
+// these objects (one per workspace tile the cortex-api exposes).
+// -----------------------------------------------------------------
+
+export interface TileCapability {
+  id: string;
+  label: string;
+  category: string;
+  engine?: string;
+  status: "live" | "degraded" | "partial" | "planned";
+  degradedReason?: string;
+  minWidth?: number;
+  minColShare?: number;
+  requires: {
+    engagementId?: boolean;
+    apn?: boolean;
+    jurisdiction?: boolean;
+    uploadedDocuments?: boolean;
+    completedFindings?: boolean;
+  };
+  produces: {
+    spatialOverlays?: boolean;
+    findings?: boolean;
+    annotations?: boolean;
+    letter?: boolean;
+  };
+  modes: Array<"full" | "card" | "inline" | "raw">;
+  mcpTools: string[];
+}
+
 export interface CreateSubmissionResponse {
   // Legacy backend returns the inserted submission row; pass-through.
   submission: Record<string, unknown>;
@@ -1260,6 +1292,25 @@ export const legacyClient = {
   }): Promise<BriefingResponse> {
     const { body } = await legacyFetch<BriefingResponse>(
       `/api/engagements/${encodeURIComponent(params.engagementId)}/briefing`,
+      { method: "GET" },
+    );
+    return body;
+  },
+
+  /**
+   * GET /api/plan-review/admin/tile-registry
+   *
+   * Fetches the cortex-api tile capability registry (the set of
+   * workspace tiles cortex-api can render, with their requirements,
+   * produced artifacts, render modes, and backing MCP tools). Uses the
+   * existing Bearer service-token path (LEGACY_BACKEND_URL +
+   * LEGACY_BACKEND_API_KEY via legacyFetch). Returns the JSON array
+   * verbatim. Must only be called inside a tool handler, never at
+   * module load / server startup.
+   */
+  async getTileRegistry(): Promise<TileCapability[]> {
+    const { body } = await legacyFetch<TileCapability[]>(
+      "/api/plan-review/admin/tile-registry",
       { method: "GET" },
     );
     return body;
