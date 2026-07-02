@@ -55,6 +55,10 @@ import {
   LegacyUnreachableError,
   legacyClient,
 } from "./legacy-client.js";
+import {
+  composeWorkspace,
+  type EngagementContext,
+} from "./compose-workspace.js";
 import { logger } from "./logger.js";
 import type { Product } from "./products.js";
 import {
@@ -3705,6 +3709,106 @@ export function registerTools(server: McpServer) {
         );
       } catch (err) {
         return errorContent(describeLegacyFailure("get_parcel_polygon", err));
+      }
+    },
+  );
+
+  // ----- Adaptive interface. Gate: product='cortex' (cortex-api reporting function). -----
+  server.tool(
+    "compose_workspace",
+    TOOL_COPY.compose_workspace,
+    {
+      intent: z
+        .string()
+        .min(1)
+        .describe(
+          "Natural-language description of what the workspace should show (e.g. 'compliance and hazard for this parcel').",
+        ),
+      engagement_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe(
+          "Optional engagement id. When given, tiles are filtered to those whose requirements the engagement satisfies.",
+        ),
+      available_tile_ids: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Optional allow-list of tile ids to consider. Omit to consider the whole registry.",
+        ),
+      max_tiles: z
+        .number()
+        .int()
+        .positive()
+        .max(12)
+        .optional()
+        .describe("Max tiles to include, default 4."),
+    },
+    async ({ intent, engagement_id, available_tile_ids, max_tiles }) => {
+      const gate = requireProduct("compose_workspace", "cortex");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        // Fetch the tile capability registry at invocation time (never
+        // at module load). This is the live cortex-api registry via the
+        // existing Bearer service-token path.
+        const registry = await legacyClient.getTileRegistry();
+
+        // Build engagement context only when an engagement_id is given.
+        // cortex-api has no single engagement-context endpoint, so we
+        // derive a conservative context: the engagementId requirement is
+        // satisfied by the id itself; we probe the briefing to learn
+        // whether the parcel is resolved (apn/jurisdiction). We cannot
+        // cheaply confirm uploaded documents or completed findings, so
+        // we treat them as present (optimistic) — an active engagement
+        // in the workspace normally has an uploaded submission, and
+        // strict filtering here would wrongly drop compliance-run /
+        // document-viewer for a valid engagement. A dedicated
+        // engagement-context endpoint is a follow-on.
+        let ctx: EngagementContext | undefined;
+        if (engagement_id) {
+          const briefing = await legacyClient
+            .fetchBriefing({ engagementId: engagement_id })
+            .catch(() => null);
+          const resolved = !!(briefing && briefing.briefing);
+          ctx = {
+            id: engagement_id,
+            apn: resolved,
+            jurisdiction: resolved,
+            hasDocuments: true,
+            hasFindings: true,
+          };
+        }
+
+        const composition = composeWorkspace(
+          {
+            intent,
+            engagementId: engagement_id,
+            availableTileIds: available_tile_ids,
+            maxTiles: max_tiles,
+          },
+          registry,
+          ctx,
+        );
+
+        logToolInvocation({
+          tool: "compose_workspace",
+          tier,
+          engagement_id,
+          tile_count: composition.tiles.length,
+        });
+
+        // Return the bare WorkspaceComposition JSON verbatim. The
+        // consumer (@hauska/tile-shell) expects the raw object, not an
+        // atom envelope.
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(composition, null, 2) },
+          ],
+        };
+      } catch (err) {
+        return errorContent(describeLegacyFailure("compose_workspace", err));
       }
     },
   );
