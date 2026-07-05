@@ -37,23 +37,58 @@
 // Run cutover.
 
 import { logger } from "./logger.js";
-import { getCurrentAuthContext } from "./request-context.js";
+import { getCurrentAccessSubject } from "./request-context.js";
+import { buildSignedGateContext } from "./gate-context.js";
 
 /** ADR-008 / PR #160 gate-front seam headers forwarded to cortex-api engine routes. */
 const GATE_JURISDICTION_TENANT_HEADER = "X-Hauska-Jurisdiction-Tenant";
 const GATE_PLATFORM_INTERNAL_HEADER = "X-Hauska-Platform-Internal";
 
+/** Tenancy T1 gate-signed context headers. */
+const GATE_CONTEXT_HEADER = "X-Hauska-Gate-Context";
+const GATE_SIGNATURE_HEADER = "X-Hauska-Gate-Signature";
+
+function gateSigningKey(): string | undefined {
+  return process.env.GATE_CONTEXT_SIGNING_KEY?.trim() || undefined;
+}
+
 function gateFrontScopeHeaders(): Record<string, string> {
-  const auth = getCurrentAuthContext();
-  if (!auth) return {};
+  const subject = getCurrentAccessSubject();
   const headers: Record<string, string> = {};
-  const tenant = auth.jurisdiction_tenant?.trim();
+
+  // Plain forwarded headers (backward compat during staged rollout).
+  const tenant = subject.jurisdictionTenant?.trim();
   if (tenant) {
     headers[GATE_JURISDICTION_TENANT_HEADER] = tenant;
   }
-  if (auth.platform_internal) {
+  if (subject.platformInternal) {
     headers[GATE_PLATFORM_INTERNAL_HEADER] = "true";
   }
+
+  // Signed gate context (T1 producer side). If the signing key is
+  // unset, skip stamping — behavior identical to today.
+  const key = gateSigningKey();
+  if (key) {
+    try {
+      const { payload, signature } = buildSignedGateContext(
+        {
+          tenant: subject.jurisdictionTenant,
+          product: subject.tier === "free_anonymous" ? "public" : "public",
+          tier: subject.tier,
+          keyId: null,
+          platformInternal: subject.platformInternal,
+        },
+        key,
+      );
+      headers[GATE_CONTEXT_HEADER] = payload;
+      headers[GATE_SIGNATURE_HEADER] = signature;
+    } catch (err) {
+      logger.warn("gate_context_signing_failed", {
+        error: String(err),
+      });
+    }
+  }
+
   return headers;
 }
 

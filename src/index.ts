@@ -338,6 +338,19 @@ async function main() {
     });
   });
 
+  // Tenancy T1 gate-signed context — log startup warning if the signing
+  // key is unset. Never crash; the gate simply skips stamping signed
+  // contexts when the key is absent (behavior identical to today).
+  if (!process.env.GATE_CONTEXT_SIGNING_KEY?.trim()) {
+    logger.warn("gate_context_signing_key_unset", {
+      message:
+        "GATE_CONTEXT_SIGNING_KEY is not configured. The gate will forward " +
+        "plain tenant headers without signing them. Upstream services will " +
+        "not be able to verify tenant context. Set GATE_CONTEXT_SIGNING_KEY " +
+        "to enable T1 gate-signed tenant context.",
+    });
+  }
+
   app.listen(PORT, () => {
     logger.info("server_started", {
       port: PORT,

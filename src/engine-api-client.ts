@@ -15,9 +15,14 @@ import {
   type MapLayersAssembleEngineEnvelope,
   type MapLayersAssembleRequest,
 } from "./map-layers-contract.js";
+import { buildSignedGateContext } from "./gate-context.js";
 
 const DEFAULT_ENGINE_API_URL = "http://localhost:8080";
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Tenancy T1 gate-signed context headers. */
+const GATE_CONTEXT_HEADER = "X-Hauska-Gate-Context";
+const GATE_SIGNATURE_HEADER = "X-Hauska-Gate-Signature";
 
 function engineApiUrl(): string {
   return (
@@ -33,6 +38,10 @@ function engineApiGateToken(): string {
     process.env.HAUSKA_ENGINE_API_KEY ??
     ""
   );
+}
+
+function gateSigningKey(): string | undefined {
+  return process.env.GATE_CONTEXT_SIGNING_KEY?.trim() || undefined;
 }
 
 export class EngineApiHttpError extends Error {
@@ -61,6 +70,12 @@ async function engineApiFetch<T>(
   init: RequestInit & {
     timeoutMs?: number;
     gateHeaders: Record<string, string>;
+    gateContext?: {
+      tenant: string | null;
+      product: string;
+      tier: string;
+      platformInternal: boolean;
+    };
   },
 ): Promise<T> {
   const url = `${engineApiUrl()}${path}`;
@@ -73,6 +88,31 @@ async function engineApiFetch<T>(
   };
   const token = engineApiGateToken();
   if (token) headers.authorization = `Bearer ${token}`;
+
+  // Attach signed gate context (T1 producer side). If the signing key
+  // is unset, skip stamping — behavior identical to today.
+  const key = gateSigningKey();
+  if (key && init.gateContext) {
+    try {
+      const { payload, signature } = buildSignedGateContext(
+        {
+          tenant: init.gateContext.tenant,
+          product: init.gateContext.product,
+          tier: init.gateContext.tier,
+          keyId: null,
+          platformInternal: init.gateContext.platformInternal,
+        },
+        key,
+      );
+      headers[GATE_CONTEXT_HEADER] = payload;
+      headers[GATE_SIGNATURE_HEADER] = signature;
+    } catch (err) {
+      logger.warn("gate_context_signing_failed", {
+        url,
+        error: String(err),
+      });
+    }
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -135,6 +175,12 @@ export const engineApiClient = {
         method: "POST",
         body: JSON.stringify(request),
         gateHeaders,
+        gateContext: {
+          tenant: gate.tenantId,
+          product: gate.gateProduct,
+          tier: gate.accessTier,
+          platformInternal: gate.accessTier === "platform-internal",
+        },
       },
     );
   },
@@ -161,6 +207,12 @@ export const engineApiClient = {
       {
         method: "GET",
         gateHeaders,
+        gateContext: {
+          tenant: gate.tenantId,
+          product: gate.gateProduct,
+          tier: gate.accessTier,
+          platformInternal: gate.accessTier === "platform-internal",
+        },
       },
     );
   },
