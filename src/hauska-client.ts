@@ -98,6 +98,31 @@ export interface GetAtomResponse {
   }>;
 }
 
+export interface AtomTraceProvenance {
+  atomDid: string;
+  sourceAdapter: string;
+  sourceUrl: string;
+  fetchedAt: string;
+  contentHash: string;
+}
+
+export interface AtomTraceEdge {
+  link: AtomLink;
+  atom: AtomInstanceBase | null;
+  atomDid: string;
+}
+
+export interface AtomTraceResponse {
+  atom: AtomInstanceBase;
+  atomDid: string;
+  contextSummary: Record<string, unknown>;
+  provenance: AtomTraceProvenance;
+  consequenceStrata: ReadonlyArray<{ kind: string; value: string }>;
+  citations: ReadonlyArray<Record<string, unknown>>;
+  outbound: ReadonlyArray<AtomTraceEdge>;
+  inbound: ReadonlyArray<AtomTraceEdge>;
+}
+
 /** Per-jurisdiction snapshot from `GET /jurisdictions` and `:id`. */
 export interface JurisdictionStatusSnapshot {
   jurisdictionTenant: string;
@@ -305,5 +330,25 @@ export const hauskaClient = {
       params.jurisdiction,
     )}/permits?${qs.toString()}`;
     return engineFetch<QueryJurisdictionResponse>(path);
+  },
+
+  async getAtomTrace(params: {
+    atomDid: string;
+    audience?: "user" | "ai" | "internal";
+  }): Promise<AtomTraceResponse | null> {
+    const qs = new URLSearchParams();
+    if (params.audience) qs.set("audience", params.audience);
+    const query = qs.toString();
+    const path = `/atoms/trace/${encodeURIComponent(params.atomDid)}${
+      query ? `?${query}` : ""
+    }`;
+    try {
+      return await engineFetch<AtomTraceResponse>(path);
+    } catch (err) {
+      if (err instanceof EngineHttpError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
   },
 };

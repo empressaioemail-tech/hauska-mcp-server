@@ -75,11 +75,11 @@ test("requireProduct allows when bound product matches expected", () => {
   );
 });
 
-test("requireProduct denies cross-product (cortex key cannot call codex tool)", () => {
+test("requireProduct denies cross-product (reporting key cannot call codex tool)", () => {
   withCtx(
     {
       tier: "developer_pro",
-      product: "cortex",
+      product: "reporting",
       rate_limit_id: "test",
       remaining_rpm: -1,
       remaining_daily: -1,
@@ -91,23 +91,23 @@ test("requireProduct denies cross-product (cortex key cannot call codex tool)", 
   );
 });
 
-test("requireProduct allows cortex tool when bound product is cortex", () => {
+test("requireProduct allows reporting tool when bound product is reporting", () => {
   withCtx(
     {
       tier: "developer_pro",
-      product: "cortex",
+      product: "reporting",
       rate_limit_id: "test",
       remaining_rpm: -1,
       remaining_daily: -1,
     },
     () => {
-      const result = requireProduct("cortex_snapshot_register", "cortex");
+      const result = requireProduct("cortex_snapshot_register", "reporting");
       assert.equal(result.ok, true);
     },
   );
 });
 
-test("requireProduct denies cortex tool when caller is codex-product", () => {
+test("requireProduct denies reporting tool when caller is codex-product", () => {
   withCtx(
     {
       tier: "developer_pro",
@@ -117,11 +117,11 @@ test("requireProduct denies cortex tool when caller is codex-product", () => {
       remaining_daily: -1,
     },
     () => {
-      const result = requireProduct("cortex_ifc_ingest", "cortex");
+      const result = requireProduct("cortex_ifc_ingest", "reporting");
       assert.equal(result.ok, false);
       if (!result.ok) {
         const message = result.content.content[0]?.text ?? "";
-        assert.match(message, /requires a "cortex"-product/);
+        assert.match(message, /requires a "reporting"-product/);
         assert.match(message, /product "codex"/);
       }
     },

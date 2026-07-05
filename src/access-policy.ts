@@ -10,8 +10,12 @@ import type { AuthContext } from "./auth.js";
 import { logger } from "./logger.js";
 import type { Tier } from "./tiers.js";
 
-/** Contract union plus tenant-shared (ships @hauska/atom-contract >=1.2). */
-export type EnforcedAccessPolicy = AccessPolicy | "tenant-shared";
+/**
+ * Access policy enforced at the MCP gate. Equal to the contract union:
+ * @hauska/atom-contract >=1.2 supplies the full five-value union including
+ * "tenant-shared", so no local extension is needed (verified against 1.6.1).
+ */
+export type EnforcedAccessPolicy = AccessPolicy;
 
 export type AccessSubjectTier = Tier | "free_anonymous";
 

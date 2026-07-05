@@ -5,6 +5,7 @@
 
 import { logger } from "./logger.js";
 import { getCurrentAuthContext } from "./request-context.js";
+import { atomIdsFromProvenance } from "./read-attribution.js";
 
 export type GtmErrorClass =
   | "no_coverage"
@@ -21,7 +22,12 @@ export interface ToolInvocationFields {
   jurisdiction_key?: string;
   error_class?: GtmErrorClass;
   latency_ms?: number;
+  /** Atom-grain DID list for Postgres request_log.atom_ids_returned. */
+  atom_ids?: string[];
+  /** Legacy numeric count; derived from atom_ids when envelope/atoms supplied. */
   atom_ids_returned?: number;
+  /** Read envelope; atom_ids derived from envelope.atoms when present. */
+  envelope?: { atoms: ReadonlyArray<{ did: string }> };
   [key: string]: unknown;
 }
 
@@ -77,11 +83,26 @@ export function logToolInvocation(fields: ToolInvocationFields): void {
     fields.jurisdiction_key ??
     (typeof fields.jurisdiction === "string" ? fields.jurisdiction : undefined);
 
+  const derivedAtomIds =
+    fields.atom_ids ??
+    (fields.envelope
+      ? atomIdsFromProvenance(fields.envelope.atoms)
+      : undefined);
+  const atomCount =
+    derivedAtomIds !== undefined
+      ? derivedAtomIds.length
+      : typeof fields.atom_ids_returned === "number"
+        ? fields.atom_ids_returned
+        : undefined;
+
+  const { envelope: _envelope, ...rest } = fields;
   const payload: Record<string, unknown> = {
-    ...fields,
+    ...rest,
     key_hash,
     is_external: isExternalCaller(ctx?.key_hash),
     ...(jurisdiction_key ? { jurisdiction_key } : {}),
+    ...(derivedAtomIds !== undefined ? { atom_ids: derivedAtomIds } : {}),
+    ...(atomCount !== undefined ? { atom_ids_returned: atomCount } : {}),
   };
 
   logger.info("tool_call", payload);
@@ -95,7 +116,9 @@ export function logToolInvocation(fields: ToolInvocationFields): void {
     jurisdiction_key: jurisdiction_key ?? null,
     error_class: fields.error_class ?? null,
     latency_ms: fields.latency_ms ?? null,
-    atom_ids_returned: fields.atom_ids_returned ?? null,
+    atom_ids_returned:
+      atomCount ??
+      (Array.isArray(fields.atom_ids) ? fields.atom_ids.length : null),
     request_id: ctx?.request_id ?? null,
   }).catch((err) => {
     logger.warn("gtm_mcp_event_post_failed", {

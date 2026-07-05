@@ -191,7 +191,7 @@ async function main() {
     });
     rateLimitStore = new MemoryRateLimitStore();
     // Dev mode honors an optional X-Hauska-Dev-Product header so a
-    // local developer can exercise codex_* / cortex_* tools without
+    // local developer can exercise codex / reporting / map tools without
     // standing up the api_keys table. Missing / unknown header defaults
     // to 'public' which matches production-anonymous behavior.
     authMiddleware = (req, _res, next) => {
@@ -332,6 +332,7 @@ async function main() {
       healthz: "/healthz",
       gate_probe: "/gate-probe",
       admin: "/admin/keys",
+      admin_introspection: "/admin/introspection/tools",
       dev_mode: devMode,
     });
   });
