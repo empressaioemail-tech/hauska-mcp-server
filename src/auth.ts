@@ -145,7 +145,21 @@ export function buildAuthMiddleware(store: RateLimitStore) {
 
       const limits = limitsForTier(row.tier);
       const identifier = `key:${row.key_id}`;
-      const decision = await checkRateLimit(store, identifier, limits);
+      let decision: RateLimitDecision;
+      try {
+        decision = await checkRateLimit(store, identifier, limits);
+      } catch (err) {
+        logger.error("rate_limit_store_error", {
+          error: String(err),
+          identifier_class: "key",
+        });
+        decision = {
+          allowed: true,
+          reason: "ok",
+          remaining_rpm: -1,
+          remaining_daily: -1,
+        };
+      }
       if (!decision.allowed) {
         logger.warn("auth_rate_limited", {
           key_id: row.key_id,
@@ -178,9 +192,10 @@ export function buildAuthMiddleware(store: RateLimitStore) {
     try {
       decision = await checkRateLimit(store, identifier, limits);
     } catch (err) {
-      logger.error("rate_limit_error", { error: String(err), identifier });
-      // If the rate limiter is down, fail open with a low-cardinality log.
-      // Cloud Run min-instances=1 plus Upstash REST should keep this rare.
+      logger.error("rate_limit_store_error", {
+        error: String(err),
+        identifier_class: "ip",
+      });
       decision = {
         allowed: true,
         reason: "ok",

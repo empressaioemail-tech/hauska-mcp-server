@@ -24,6 +24,7 @@ import { isProduct, type Product } from "./products.js";
 import {
   buildUpstashStore,
   MemoryRateLimitStore,
+  ResilientRateLimitStore,
   type RateLimitStore,
 } from "./rate-limit.js";
 import { requestContext } from "./request-context.js";
@@ -219,7 +220,21 @@ async function main() {
       next();
     };
   } else {
-    rateLimitStore = buildUpstashStore();
+    let primaryStore: RateLimitStore;
+    try {
+      primaryStore = buildUpstashStore();
+    } catch (err) {
+      logger.warn("rate_limit_store_env_missing", {
+        error: String(err),
+        fallback: "MemoryRateLimitStore",
+        note:
+          ENV === "production"
+            ? "PRODUCTION WARNING: Rate limits are per-instance only. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for distributed rate limiting."
+            : "Using in-memory rate limiter. Limits are per-instance only.",
+      });
+      primaryStore = new MemoryRateLimitStore();
+    }
+    rateLimitStore = new ResilientRateLimitStore(primaryStore, logger);
     authMiddleware = buildAuthMiddleware(rateLimitStore);
   }
 
