@@ -28,6 +28,7 @@ const MAP_TOOLS = new Set([
 ]);
 
 const REPORTING_TOOLS = new Set([
+  "compose_workspace",
   "atom_export",
   "read_atom_calibration",
   "generate_property_brief",

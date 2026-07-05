@@ -1,4 +1,4 @@
--- 003: split legacy cortex product into reporting + map gates.
+-- 005: split legacy cortex product into reporting + map gates.
 --
 -- Existing cortex keys backfill to reporting (property intel + L-surface).
 -- Operators mint new map-product keys for spatial / hydrology / assemble_map_layers.

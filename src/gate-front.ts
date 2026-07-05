@@ -24,6 +24,7 @@ export const GATE_FRONT_ACCESS_TIERS = [
   "public-paid",
   "platform-internal",
   "tenant-private",
+  "tenant-shared",
 ] as const;
 
 export type GateFrontAccessTier = (typeof GATE_FRONT_ACCESS_TIERS)[number];
@@ -61,7 +62,7 @@ export function resolveGateAccessTier(
   if (ctx.platform_internal) return "platform-internal";
   if (ctx.jurisdiction_tenant?.trim()) return "tenant-private";
   if (ctx.tier !== "free") return "public-paid";
-  return "public-paid";
+  return "public-free";
 }
 
 export function resolveGateTenantId(ctx: AuthContext | undefined): string | null {
