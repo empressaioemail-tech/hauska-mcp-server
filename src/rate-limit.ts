@@ -65,6 +65,68 @@ export function buildUpstashStore(): UpstashRateLimitStore {
 }
 
 // -----------------------------------------------------------------
+// Resilient store wrapper with circuit-breaker fallback.
+//
+// Wraps a primary store (typically Upstash) and automatically falls
+// back to a MemoryRateLimitStore when the primary fails. Retries the
+// primary no more than once every 60s. Never throws; always returns
+// a decision (fail-degraded, not fail-closed).
+// -----------------------------------------------------------------
+
+export class ResilientRateLimitStore implements RateLimitStore {
+  private fallbackStore: MemoryRateLimitStore | null = null;
+  private lastFailureTimeMs = 0;
+  private readonly retryWindowMs = 60_000;
+  private now: () => number = () => Date.now();
+
+  constructor(
+    private readonly primary: RateLimitStore,
+    private readonly logger: { error: (event: string, data: any) => void },
+  ) {}
+
+  setClock(now: () => number): void {
+    this.now = now;
+  }
+
+  async incrWithTtl(key: string, ttlSeconds: number): Promise<number> {
+    const nowMs = this.now();
+    const inFallbackMode = this.fallbackStore !== null;
+
+    if (inFallbackMode) {
+      const fallback = this.fallbackStore!;
+      const shouldRetry = nowMs - this.lastFailureTimeMs >= this.retryWindowMs;
+      if (shouldRetry) {
+        try {
+          const result = await this.primary.incrWithTtl(key, ttlSeconds);
+          this.fallbackStore = null;
+          this.logger.error("rate_limit_store_recovered", {});
+          return result;
+        } catch (err) {
+          this.lastFailureTimeMs = nowMs;
+          this.logger.error("rate_limit_store_degraded", {
+            error: String(err),
+          });
+          return fallback.incrWithTtl(key, ttlSeconds);
+        }
+      }
+      return fallback.incrWithTtl(key, ttlSeconds);
+    }
+
+    try {
+      return await this.primary.incrWithTtl(key, ttlSeconds);
+    } catch (err) {
+      this.lastFailureTimeMs = nowMs;
+      this.fallbackStore = new MemoryRateLimitStore();
+      this.fallbackStore.setClock(this.now);
+      this.logger.error("rate_limit_store_degraded", {
+        error: String(err),
+      });
+      return this.fallbackStore.incrWithTtl(key, ttlSeconds);
+    }
+  }
+}
+
+// -----------------------------------------------------------------
 // In-memory store for tests and local dev.
 //
 // Not safe across multiple processes. Do not use behind a load balancer.
