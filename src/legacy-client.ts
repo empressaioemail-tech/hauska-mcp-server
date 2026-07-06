@@ -37,7 +37,7 @@
 // Run cutover.
 
 import { logger } from "./logger.js";
-import { getCurrentAccessSubject } from "./request-context.js";
+import { getCurrentAccessSubject, getCurrentProduct } from "./request-context.js";
 import { buildSignedGateContext } from "./gate-context.js";
 
 /** ADR-008 / PR #160 gate-front seam headers forwarded to cortex-api engine routes. */
@@ -73,7 +73,7 @@ function gateFrontScopeHeaders(): Record<string, string> {
       const { payload, signature } = buildSignedGateContext(
         {
           tenant: subject.jurisdictionTenant,
-          product: subject.tier === "free_anonymous" ? "public" : "public",
+          product: getCurrentProduct(),
           tier: subject.tier,
           keyId: null,
           platformInternal: subject.platformInternal,
