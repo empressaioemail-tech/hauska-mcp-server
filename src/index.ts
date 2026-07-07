@@ -19,6 +19,7 @@ import { emitGateProbeSignal, runGateProbe } from "./gate-probe.js";
 import { buildHealthzReportAndEmit } from "./healthz.js";
 import { createLogSink, type LogSinkHandle } from "./log-sink.js";
 import { addLogSink, logger } from "./logger.js";
+import { getMeteringSummary } from "./metering-summary.js";
 import { metrics } from "./metrics.js";
 import { isProduct, type Product } from "./products.js";
 import {
@@ -265,6 +266,11 @@ async function main() {
   // misrouted admin call never reaches the MCP transport. In dev mode
   // the admin router will fail at the DB layer; that is expected.
   app.use("/admin", adminAuthMiddleware, buildAdminRouter());
+
+  // Metering summary endpoint (A4c). Gated by platform_internal key.
+  // Mounted OUTSIDE /admin so the command-center proxy (which blocks
+  // /admin/*) can reach it with its reporting key.
+  app.get("/metering/summary", authMiddleware, getMeteringSummary);
 
   // The MCP endpoint. Auth runs first, then the transport handles the
   // JSON-RPC request. The auth context is bound via AsyncLocalStorage so
