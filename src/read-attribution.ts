@@ -2,6 +2,8 @@
 
 import { logToolInvocation, type ToolInvocationFields } from "./gtm-observability.js";
 import type { AtomProvenanceEntry } from "./atom-shape.js";
+import { recordLayer2Call } from "./metering.js";
+import { getCurrentAuthContext, getCurrentProduct, getCurrentRequestId, getCurrentTier } from "./request-context.js";
 
 /** Deduped DID list from envelope provenance entries. */
 export function atomIdsFromProvenance(
@@ -38,4 +40,27 @@ export function logToolRead(
     atom_ids,
     atom_ids_returned: atom_ids.length,
   });
+
+  // Layer 2 call metering: record successful product-gated tool calls
+  // (product != "public") by authenticated callers for billing.
+  const ctx = getCurrentAuthContext();
+  const product = getCurrentProduct();
+  const tier = getCurrentTier();
+  const requestId = getCurrentRequestId();
+
+  if (
+    product !== "public" &&
+    ctx?.key_id &&
+    ctx?.key_hash &&
+    requestId
+  ) {
+    recordLayer2Call({
+      keyId: ctx.key_id,
+      keyHash: ctx.key_hash,
+      product,
+      tier,
+      tool: fields.tool,
+      requestId,
+    });
+  }
 }

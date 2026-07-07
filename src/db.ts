@@ -28,6 +28,7 @@ export interface ApiKeyRow {
   last_used_at: Date | null;
   status: KeyStatus;
   notes: string | null;
+  stripe_customer_id: string | null;
 }
 
 // Public-safe projection. Never includes key_hash.
@@ -43,6 +44,7 @@ export interface ApiKeyPublic {
   last_used_at: string | null;
   status: KeyStatus;
   notes: string | null;
+  stripe_customer_id: string | null;
 }
 
 let pool: pg.Pool | null = null;
@@ -82,6 +84,7 @@ function rowToPublic(row: ApiKeyRow): ApiKeyPublic {
     last_used_at: row.last_used_at ? row.last_used_at.toISOString() : null,
     status: row.status,
     notes: row.notes,
+    stripe_customer_id: row.stripe_customer_id,
   };
 }
 
@@ -99,6 +102,7 @@ function castRow(raw: Record<string, unknown>): ApiKeyRow {
       : "public";
   const jurisdictionTenantRaw = raw.jurisdiction_tenant;
   const platformInternalRaw = raw.platform_internal;
+  const stripeCustomerIdRaw = raw.stripe_customer_id;
   return {
     key_id: raw.key_id as string,
     key_hash: raw.key_hash as string,
@@ -113,11 +117,13 @@ function castRow(raw: Record<string, unknown>): ApiKeyRow {
     last_used_at: (raw.last_used_at as Date | null) ?? null,
     status: raw.status as KeyStatus,
     notes: (raw.notes as string | null) ?? null,
+    stripe_customer_id:
+      typeof stripeCustomerIdRaw === "string" ? stripeCustomerIdRaw : null,
   };
 }
 
 const SELECT_COLS =
-  "key_id, key_hash, tier, product, jurisdiction_tenant, platform_internal, owner_email, owner_name, created_at, last_used_at, status, notes";
+  "key_id, key_hash, tier, product, jurisdiction_tenant, platform_internal, owner_email, owner_name, created_at, last_used_at, status, notes, stripe_customer_id";
 
 export async function insertKey(params: {
   key_hash: string;
@@ -184,6 +190,7 @@ export async function updateKey(
     platform_internal?: boolean;
     status?: KeyStatus;
     notes?: string | null;
+    stripe_customer_id?: string | null;
   },
 ): Promise<ApiKeyPublic | null> {
   const sets: string[] = [];
@@ -212,6 +219,10 @@ export async function updateKey(
   if (patch.notes !== undefined) {
     sets.push(`notes = $${i++}`);
     values.push(patch.notes);
+  }
+  if (patch.stripe_customer_id !== undefined) {
+    sets.push(`stripe_customer_id = $${i++}`);
+    values.push(patch.stripe_customer_id);
   }
   if (sets.length === 0) {
     // No-op patch: just return the current row.
