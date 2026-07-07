@@ -9,14 +9,14 @@ import type { Request, Response } from "express";
 import { getPool } from "./db.js";
 import { logger } from "./logger.js";
 
-interface DaySummary {
+export interface DaySummary {
   date: string;
   layer2Calls: number;
   byProduct: Record<string, number>;
   byTool: Record<string, number>;
 }
 
-interface MeteringSummaryResponse {
+export interface MeteringSummaryResponse {
   windowDays: number;
   totals: {
     layer2Calls: number;
@@ -54,7 +54,8 @@ export async function getMeteringSummary(
   const daysParam = req.query.days;
   let days = 7;
   if (daysParam !== undefined) {
-    const parsed = parseInt(String(daysParam), 10);
+    const raw = String(daysParam);
+    const parsed = /^\d+$/.test(raw) ? parseInt(raw, 10) : NaN;
     if (!Number.isInteger(parsed) || parsed < 1 || parsed > 31) {
       res.status(400).json({
         error: "invalid_days_parameter",
@@ -84,9 +85,9 @@ async function buildMeteringSummary(
   windowDays: number,
 ): Promise<MeteringSummaryResponse> {
   const pool = getPool();
+  const now = new Date();
 
   // Calculate window start (midnight UTC, N days ago)
-  const now = new Date();
   const windowStart = new Date(now);
   windowStart.setUTCDate(now.getUTCDate() - windowDays);
   windowStart.setUTCHours(0, 0, 0, 0);
@@ -105,13 +106,6 @@ async function buildMeteringSummary(
      WHERE ts >= $1`,
     [windowStart.toISOString()],
   );
-
-  const totalsRow = totalsResult.rows[0];
-  const totals = {
-    layer2Calls: parseInt(totalsRow?.total ?? "0", 10),
-    billed: parseInt(totalsRow?.billed ?? "0", 10),
-    unbilled: parseInt(totalsRow?.unbilled ?? "0", 10),
-  };
 
   // Aggregate by day, product, and tool
   const dailyResult = await pool.query<{
@@ -132,10 +126,34 @@ async function buildMeteringSummary(
     [windowStart.toISOString()],
   );
 
+  return aggregateMeteringRows(
+    totalsResult.rows[0],
+    dailyResult.rows,
+    windowDays,
+    now,
+  );
+}
+
+/**
+ * Pure aggregation over the two query result shapes — exported for
+ * DB-free unit tests.
+ */
+export function aggregateMeteringRows(
+  totalsRow: { total: string; billed: string; unbilled: string } | undefined,
+  dailyRows: Array<{ date: string; product: string; tool: string; count: string }>,
+  windowDays: number,
+  now: Date,
+): MeteringSummaryResponse {
+  const totals = {
+    layer2Calls: parseInt(totalsRow?.total ?? "0", 10),
+    billed: parseInt(totalsRow?.billed ?? "0", 10),
+    unbilled: parseInt(totalsRow?.unbilled ?? "0", 10),
+  };
+
   // Build a map of date -> {layer2Calls, byProduct, byTool}
   const dayMap = new Map<string, DaySummary>();
 
-  for (const row of dailyResult.rows) {
+  for (const row of dailyRows) {
     const date = row.date;
     const product = row.product;
     const tool = row.tool;
