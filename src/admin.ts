@@ -62,6 +62,7 @@ const PatchBody = z
     platform_internal: z.boolean().optional(),
     status: STATUS_ENUM.optional(),
     notes: z.string().max(2000).nullable().optional(),
+    stripe_customer_id: z.string().min(1).max(200).nullable().optional(),
   })
   .refine(
     (v) =>
@@ -70,8 +71,9 @@ const PatchBody = z
       v.jurisdiction_tenant !== undefined ||
       v.platform_internal !== undefined ||
       v.status !== undefined ||
-      v.notes !== undefined,
-    "At least one of tier, product, jurisdiction_tenant, platform_internal, status, notes must be provided.",
+      v.notes !== undefined ||
+      v.stripe_customer_id !== undefined,
+    "At least one of tier, product, jurisdiction_tenant, platform_internal, status, notes, stripe_customer_id must be provided.",
   );
 
 export function buildAdminRouter(): Router {
