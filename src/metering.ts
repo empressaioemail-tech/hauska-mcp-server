@@ -6,7 +6,7 @@
 // A Layer 2 call = successful `tools/call` on a product-gated tool by a keyed caller.
 // Public-product tools are Layer 1 (free tier, never metered).
 
-import { findKeyByHash } from "./db.js";
+import { findKeyByHash, getPool } from "./db.js";
 import { logger } from "./logger.js";
 import type { Product } from "./products.js";
 
@@ -23,6 +23,7 @@ export interface Layer2CallParams {
  * Records a Layer 2 call for metering and billing.
  * 
  * - ALWAYS emits a structured `layer2_call` log event (native truth for revenue panel)
+ * - Writes to metering_events table (migration 007) for /metering/summary aggregation
  * - When STRIPE_SECRET_KEY is set AND key has stripe_customer_id, posts to Stripe meter
  * - Failures are logged but never thrown (tool path is never disrupted)
  */
@@ -30,11 +31,32 @@ export function recordLayer2Call(params: Layer2CallParams): void {
   const { keyId, keyHash, product, tier, tool, requestId } = params;
 
   // Fire-and-forget async flow: fetch key row for stripe_customer_id,
-  // then log and optionally post to Stripe. Never throws into tool path.
+  // write to metering_events table, then log and optionally post to Stripe.
+  // Never throws into tool path.
   void (async () => {
     try {
       const keyRow = await findKeyByHash(keyHash);
       const stripeCustomerId = keyRow?.stripe_customer_id ?? null;
+
+      const stripeKey = process.env.STRIPE_SECRET_KEY;
+      const canBill = !!stripeKey && !!stripeCustomerId;
+
+      // Write to metering_events table for native revenue aggregation
+      try {
+        await getPool().query(
+          `INSERT INTO metering_events
+             (key_id, key_hash, product, tier, tool, request_id, billed)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [keyId, keyHash, product, tier, tool, requestId, canBill],
+        );
+      } catch (dbErr) {
+        // Log DB failure but continue with structured log + Stripe posting
+        logger.error("metering_events_insert_error", {
+          key_id: keyId,
+          tool,
+          error: String(dbErr).slice(0, 500),
+        });
+      }
 
       // Always log the native truth event
       logger.info("layer2_call", {
@@ -46,8 +68,6 @@ export function recordLayer2Call(params: Layer2CallParams): void {
         request_id: requestId,
         stripe_customer_id: stripeCustomerId,
       });
-
-      const stripeKey = process.env.STRIPE_SECRET_KEY;
 
       // Determine if we can bill via Stripe
       if (!stripeKey) {
