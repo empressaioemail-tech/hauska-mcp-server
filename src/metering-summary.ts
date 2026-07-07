@@ -115,13 +115,13 @@ async function buildMeteringSummary(
     count: string;
   }>(
     `SELECT
-       DATE(ts AT TIME ZONE 'UTC') as date,
+       TO_CHAR(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD') as date,
        product,
        tool,
        COUNT(*) as count
      FROM metering_events
      WHERE ts >= $1
-     GROUP BY DATE(ts AT TIME ZONE 'UTC'), product, tool
+     GROUP BY TO_CHAR(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD'), product, tool
      ORDER BY date ASC`,
     [windowStart.toISOString()],
   );
