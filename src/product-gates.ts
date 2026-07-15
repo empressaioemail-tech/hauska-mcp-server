@@ -25,6 +25,7 @@ const MAP_TOOLS = new Set([
   "simulate_site_drainage",
   "get_site_drainage",
   "get_site_topography",
+  "generate_parcel_terrain_model",
 ]);
 
 const REPORTING_TOOLS = new Set([
