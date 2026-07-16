@@ -44,6 +44,7 @@ import type {
   EncumbrancesListResponse,
   SiteDrainageReadResponse,
   SiteTopographyReadResponse,
+  ParcelTerrainModelResponse,
   CredentialPendingResponse,
   ListPropertyWorkspacesResponse,
   ListWorkspaceShareEdgesResponse,
@@ -648,6 +649,114 @@ export function siteTopographyEnvelope(
           },
         ]
       : [];
+  return buildEnvelope(response, atoms, options);
+}
+
+/**
+ * Coverage-honest confidence as it reaches the parcel-terrain-model surface.
+ * Mirrors the @hauska/atom-contract WidthedConfidence shape closely enough
+ * for the tile to read { estimate, provenance } without ever seeing a bare
+ * number. `provenance` is ALWAYS present.
+ */
+export interface NormalizedTerrainConfidence {
+  estimate: number;
+  provenance: string;
+  n: number;
+  intervalWidth: number;
+}
+
+/**
+ * Defensively shape a confidence value so a BARE number can never reach the
+ * product surface as an unqualified score (commitment 2: never present a
+ * bare or unearned number as earned).
+ *
+ *   - object with a numeric `estimate`  -> pass through, defaulting a missing
+ *     `provenance` to "asserted" (the honest floor; we never invent a
+ *     calibrated provenance here),
+ *   - bare number                        -> wrap as an asserted WidthedConfidence
+ *     ({ estimate, provenance: "asserted", n: 0, intervalWidth: 1 }),
+ *   - null / undefined / unusable        -> null (tile shows its no-confidence state).
+ *
+ * Layer 0 constructs a proper WidthedConfidence upstream, so the bare-number
+ * branch should not fire in practice; the surface must not DEPEND on that
+ * cross-repo invariant to stay honest.
+ */
+export function normalizeTerrainConfidence(
+  confidence: unknown,
+): NormalizedTerrainConfidence | null {
+  if (confidence == null) return null;
+  if (typeof confidence === "number") {
+    if (!Number.isFinite(confidence)) return null;
+    return {
+      estimate: confidence,
+      provenance: "asserted",
+      n: 0,
+      intervalWidth: 1,
+    };
+  }
+  if (typeof confidence === "object") {
+    const c = confidence as {
+      estimate?: unknown;
+      provenance?: unknown;
+      n?: unknown;
+      intervalWidth?: unknown;
+    };
+    if (typeof c.estimate === "number" && Number.isFinite(c.estimate)) {
+      return {
+        estimate: c.estimate,
+        provenance:
+          typeof c.provenance === "string" && c.provenance.trim()
+            ? c.provenance
+            : "asserted",
+        n: typeof c.n === "number" ? c.n : 0,
+        intervalWidth:
+          typeof c.intervalWidth === "number" ? c.intervalWidth : 1,
+      };
+    }
+  }
+  // Unusable shape (e.g. object without a numeric estimate): no honest
+  // number to present, so surface no confidence rather than a bare guess.
+  return null;
+}
+
+/**
+ * Parcel-terrain-model provenance envelope. Emits a
+ * did:hauska:parcel-terrain-model:<materializableElementId> provenance
+ * atom carrying the source citation (USGS 3DEP), fetched-at timestamp,
+ * and the coverage-honest confidence signals from the read row. Per
+ * structural commitment 1, the mesh and IFC references never ship without
+ * these quality-gate signals attached.
+ */
+export function parcelTerrainModelEnvelope(
+  response: ParcelTerrainModelResponse,
+  engagementId: string,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<ParcelTerrainModelResponse> {
+  const fetchedAt =
+    response.updatedAt ?? response.createdAt ?? new Date().toISOString();
+  const entityId = response.materializableElementId ?? engagementId;
+  const hasModel =
+    response.status === "ok" &&
+    (response.meshRef !== undefined || response.ifcRef !== undefined);
+  const atoms: AtomProvenanceEntry[] = hasModel
+    ? [
+        {
+          did: `did:hauska:parcel-terrain-model:${entityId}`,
+          entityType: "parcel-terrain-model",
+          entityId,
+          jurisdictionTenant: "legacy",
+          contentHash: null,
+          cidNote: CID_NOTE,
+          source: {
+            // Terrain is derived from USGS 3DEP public elevation; the
+            // materialized row is served by the legacy engine route.
+            adapter: "usgs-3dep",
+            url: `/api/engagements/${engagementId}/site-topography`,
+            fetchedAt,
+          },
+        },
+      ]
+    : [];
   return buildEnvelope(response, atoms, options);
 }
 

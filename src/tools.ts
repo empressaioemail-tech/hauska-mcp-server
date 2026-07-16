@@ -38,6 +38,8 @@ import {
   searchPermitAtomsEnvelope,
   siteDrainageEnvelope,
   siteTopographyEnvelope,
+  parcelTerrainModelEnvelope,
+  normalizeTerrainConfidence,
   buildEnvelope,
   type ToolEnvelope,
 } from "./atom-shape.js";
@@ -3643,6 +3645,128 @@ export function registerTools(server: McpServer) {
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeLegacyFailure("get_site_topography", err));
+      }
+    },
+  );
+
+  server.tool(
+    "generate_parcel_terrain_model",
+    TOOL_COPY.generate_parcel_terrain_model,
+    {
+      engagementId: z
+        .string()
+        .uuid()
+        .describe("Engagement id whose parcel terrain model to return. Required."),
+      formats: z
+        .array(z.enum(["mesh", "ifc"]))
+        .optional()
+        .default(["mesh", "ifc"])
+        .describe(
+          "Which model references to return. Defaults to both mesh and ifc.",
+        ),
+    },
+    async ({ engagementId, formats }) => {
+      // NOTE: the Group B section header above says Gate: product='cortex';
+      // that comment is stale. Map tools gate on "map"; follow the code.
+      const gate = requireProduct("generate_parcel_terrain_model", "map");
+      if (!gate.ok) return gate.content;
+      const tier = getCurrentTier();
+      try {
+        const model = await legacyClient.getParcelTerrainModel({
+          engagementId,
+        });
+        const wantMesh = formats.includes("mesh");
+        const wantIfc = formats.includes("ifc");
+        const hasMesh = model.meshRef !== undefined;
+        const hasIfc = model.ifcRef !== undefined;
+
+        // Not-yet-generated: the engagement has no materialized mesh/ifc
+        // yet. Instruct the caller to run site-topography refresh first.
+        // Do NOT fabricate geometry or provenance.
+        if (!hasMesh && !hasIfc) {
+          const notReady = {
+            status: "not-yet-generated" as const,
+            engagementId,
+            reason:
+              model.reason ??
+              "No parcel terrain model materialized for this engagement yet.",
+            nextStep:
+              "Run site-topography refresh (get_site_topography with refresh=true, " +
+              "or POST /api/engagements/:id/site-topography/refresh) to generate the " +
+              "mesh and IFC, then call generate_parcel_terrain_model again.",
+          };
+          const __readEnv = parcelTerrainModelEnvelope(
+            { ...model, status: "not-yet-generated" },
+            engagementId,
+            { tier, note: notReady.nextStep },
+          );
+          const envelope = {
+            ...__readEnv,
+            data: notReady,
+          } as ToolEnvelope<typeof notReady>;
+          logToolRead(
+            {
+              tool: "generate_parcel_terrain_model",
+              engagementId,
+              tier,
+              generated: false,
+            },
+            envelope.atoms,
+          );
+          return envelopeContent(envelope);
+        }
+
+        const data = {
+          status: model.status,
+          engagementId,
+          materializableElementId: model.materializableElementId,
+          mesh: wantMesh
+            ? {
+                available: hasMesh,
+                ref: model.meshRef ?? null,
+                metadata: model.mesh ?? null,
+              }
+            : undefined,
+          ifc: wantIfc
+            ? {
+                available: hasIfc,
+                ref: model.ifcRef ?? null,
+                metadata: model.ifc ?? null,
+              }
+            : undefined,
+          // Coverage-honesty / quality-gate signals travel with the model.
+          // Confidence is defensively normalized so a bare number can never
+          // reach the surface as an unqualified score (commitment 2): a raw
+          // number is wrapped as asserted, an object keeps its provenance
+          // (defaulted to "asserted" if absent), null stays null.
+          coverage: model.coverage ?? null,
+          confidence: normalizeTerrainConfidence(model.confidence),
+          demResolutionMeters: model.demResolutionMeters ?? null,
+          sourceCitation: model.sourceCitation ?? "USGS 3DEP",
+        };
+        const baseEnv = parcelTerrainModelEnvelope(model, engagementId, {
+          tier,
+        });
+        const __readEnv = {
+          ...baseEnv,
+          data,
+        } as ToolEnvelope<typeof data>;
+        logToolRead(
+          {
+            tool: "generate_parcel_terrain_model",
+            engagementId,
+            tier,
+            generated: true,
+            mesh: hasMesh,
+            ifc: hasIfc,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        return errorContent(
+          describeLegacyFailure("generate_parcel_terrain_model", err),
+        );
       }
     },
   );

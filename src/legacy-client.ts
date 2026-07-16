@@ -1122,6 +1122,53 @@ export interface SiteTopographyReadResponse {
   reason?: string;
 }
 
+/**
+ * Mesh metadata block carried on the site-topography read row's
+ * propertySet (emitted by siteTopographyIngest on the ldt side).
+ */
+export interface ParcelTerrainMeshMeta {
+  vertexCount?: number;
+  triangleCount?: number;
+  georefOrigin?: Record<string, unknown>;
+  byteCount?: number;
+  format?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * IFC metadata block carried on the site-topography read row's
+ * propertySet (emitted by siteTopographyIngest on the ldt side).
+ */
+export interface ParcelTerrainIfcMeta {
+  ifcSchemaVersion?: string;
+  byteCount?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Projected parcel-terrain-model view over the site-topography read row.
+ * meshRef / ifcRef are GLB / IFC object-store paths; absent when the
+ * topography has not been generated for the engagement yet.
+ */
+export interface ParcelTerrainModelResponse {
+  status: string;
+  materializableElementId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  meshRef?: string;
+  mesh?: ParcelTerrainMeshMeta;
+  ifcRef?: string;
+  ifc?: ParcelTerrainIfcMeta;
+  // Coverage-honesty signals carried alongside mesh/ifc on the propertySet.
+  confidence?: unknown;
+  coverage?: unknown;
+  contours?: unknown;
+  demResolutionMeters?: unknown;
+  sourceCitation?: unknown;
+  reason?: string;
+  raw?: Record<string, unknown>;
+}
+
 export interface EncumbranceInstrumentWire {
   id: string;
   instrument: Record<string, unknown>;
@@ -2452,6 +2499,40 @@ export const legacyClient = {
       { method: "GET" },
     );
     return body;
+  },
+
+  /**
+   * GET /api/engagements/:id/site-topography, projected as a
+   * parcel-terrain-model view. The site-topography read row's propertySet
+   * carries meshRef (GLB object path) + mesh metadata and ifcRef (IFC
+   * object path) + ifc metadata alongside contours/coverage/confidence.
+   * meshRef/ifcRef are absent until site-topography ingest has run.
+   */
+  async getParcelTerrainModel(params: {
+    engagementId: string;
+  }): Promise<ParcelTerrainModelResponse> {
+    const { body } = await legacyFetch<SiteTopographyReadResponse>(
+      `/api/engagements/${encodeURIComponent(params.engagementId)}/site-topography`,
+      { method: "GET" },
+    );
+    const props = (body.propertySet ?? {}) as Record<string, unknown>;
+    return {
+      status: body.status,
+      materializableElementId: body.materializableElementId,
+      createdAt: body.createdAt,
+      updatedAt: body.updatedAt,
+      meshRef: props.meshRef as string | undefined,
+      mesh: props.mesh as ParcelTerrainMeshMeta | undefined,
+      ifcRef: props.ifcRef as string | undefined,
+      ifc: props.ifc as ParcelTerrainIfcMeta | undefined,
+      confidence: props.confidence,
+      coverage: props.coverage,
+      contours: props.contours,
+      demResolutionMeters: props.demResolutionMeters,
+      sourceCitation: props.sourceCitation,
+      reason: body.reason,
+      raw: props,
+    };
   },
 
   // -----------------------------------------------------------------

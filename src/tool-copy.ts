@@ -105,6 +105,16 @@ export const TOOL_COPY = {
     "Read site-topography for an engagement (DEM, contours). Set refresh=true to trigger ingest first. " +
     MAP_TIER,
 
+  generate_parcel_terrain_model:
+    "Return the georeferenced 3D terrain mesh (GLB) and IFC4 model for a parcel/engagement. " +
+    "Sourced from USGS 3DEP public elevation, coverage-honest (carries confidence estimate + source-resolution + provenance). " +
+    "Layer 2 processed output: the assembled, import-ready mesh and IFC references plus their geometry metadata " +
+    "(vertex/triangle counts, georef origin, IFC schema version, byte counts) and the topography coverage signals. " +
+    "The mesh and IFC are produced during site-topography ingest and keyed to the engagement; " +
+    "if they are not yet generated, this returns a not-yet-generated response instructing the caller to run site-topography refresh first (never fabricated geometry). " +
+    "Optional formats filters the returned references to mesh, ifc, or both (default both). " +
+    MAP_TIER,
+
   search_encumbrances:
     "List recorded-instrument and restriction-clause atoms uploaded to a property workspace. " +
     "Workspace-scoped via workspace_did. " +
