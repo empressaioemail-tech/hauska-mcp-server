@@ -74,7 +74,7 @@ import {
   placeApiEnabled,
   type GtmErrorClass,
 } from "./gtm-observability.js";
-import { logToolRead } from "./read-attribution.js";
+import { authorizePaidRead, logToolRead } from "./read-attribution.js";
 import { TOOL_COPY, CODEX_TIER, CORTEX_TIER, REPORTING_TIER, MAP_TIER } from "./tool-copy.js";
 import {
   EngineHttpError,
@@ -261,32 +261,56 @@ function assertAtomReadable(
   return false;
 }
 
-// Product gate. Returns a 4xx-shaped error envelope when the caller's
-// product does not include this tool's product. Mirrors the
-// errorContent() helper so callers see a consistent isError envelope.
+// Product gate + SDK money authorize (Gate D / WDLL 3.11).
+// Returns a 4xx-shaped error envelope when the caller's product does not
+// include this tool's product, or when McpMeteringGate.authorizeCall denies.
+// Authorize runs BEFORE serve (gate-then-serve), never post-success only.
 //
 // Exported for direct testing of the gate semantics under various
 // AsyncLocalStorage bindings without spinning up a full McpServer.
-export function requireProduct(
+export async function requireProduct(
   tool: string,
   expected: Product | readonly Product[],
-): { ok: true } | { ok: false; content: ReturnType<typeof errorContent> } {
+): Promise<
+  { ok: true } | { ok: false; content: ReturnType<typeof errorContent> }
+> {
   const actual = getCurrentProduct();
   const allowed = Array.isArray(expected) ? expected : [expected];
-  if (allowed.includes(actual)) return { ok: true };
-  const expectedLabel = allowed.join('" or "');
-  logger.warn("tool_product_denied", { tool, expected: allowed, actual });
-  return {
-    ok: false,
-    content: errorContent(
-      `Tool "${tool}" requires a "${expectedLabel}"-product API key. The caller is on product "${actual}". Contact support@hauska.dev to request access.`,
-    ),
-  };
+  if (!allowed.includes(actual)) {
+    const expectedLabel = allowed.join('" or "');
+    logger.warn("tool_product_denied", { tool, expected: allowed, actual });
+    return {
+      ok: false,
+      content: errorContent(
+        `Tool "${tool}" requires a "${expectedLabel}"-product API key. The caller is on product "${actual}". Contact support@hauska.dev to request access.`,
+      ),
+    };
+  }
+
+  // Paid path: authorize via @hauska-sdk/metering before serve.
+  const meter = await authorizePaidRead({ tool });
+  if (!meter.allowed) {
+    logger.warn("tool_metering_denied", {
+      tool,
+      deny_reason: "denyReason" in meter ? meter.denyReason : null,
+    });
+    return {
+      ok: false,
+      content: errorContent(
+        meter.denyMessage ??
+          `Metering denied for tool "${tool}". Upgrade or retry after quota resets.`,
+      ),
+    };
+  }
+
+  return { ok: true };
 }
 
-function requireToolProduct(
+async function requireToolProduct(
   tool: string,
-): { ok: true } | { ok: false; content: ReturnType<typeof errorContent> } {
+): Promise<
+  { ok: true } | { ok: false; content: ReturnType<typeof errorContent> }
+> {
   const expected = requiredProductForTool(tool);
   if (!expected) return { ok: true };
   return requireProduct(tool, expected);
@@ -843,7 +867,7 @@ export function registerTools(server: McpServer) {
         .describe("Maximum number of workspace summaries to return. Defaults to 25."),
     },
     async ({ limit }) => {
-      const productGate = requireToolProduct("list_property_workspaces");
+      const productGate = await requireToolProduct("list_property_workspaces");
       if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("list_property_workspaces");
       if (!identity.ok) return identity.content;
@@ -878,7 +902,7 @@ export function registerTools(server: McpServer) {
       workspace_id: z.string().min(1).describe("Stable workspace id. Required."),
     },
     async ({ workspace_id }) => {
-      const productGate = requireToolProduct("get_property_workspace");
+      const productGate = await requireToolProduct("get_property_workspace");
       if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("get_property_workspace");
       if (!identity.ok) return identity.content;
@@ -921,7 +945,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ workspace_id, consent_visible_only }) => {
-      const productGate = requireToolProduct("list_workspace_share_edges");
+      const productGate = await requireToolProduct("list_workspace_share_edges");
       if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("list_workspace_share_edges");
       if (!identity.ok) return identity.content;
@@ -966,7 +990,7 @@ export function registerTools(server: McpServer) {
       lng: z.number().optional().describe("Longitude. Required with lat if address omitted."),
     },
     async ({ address, lat, lng }) => {
-      const productGate = requireToolProduct("resolve_place");
+      const productGate = await requireToolProduct("resolve_place");
       if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("resolve_place");
       if (!identity.ok) return identity.content;
@@ -1027,7 +1051,7 @@ export function registerTools(server: McpServer) {
       place_key: z.string().min(1).describe("placeKey from resolve_place. Required."),
     },
     async ({ place_key }) => {
-      const productGate = requireToolProduct("get_place_layers");
+      const productGate = await requireToolProduct("get_place_layers");
       if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("get_place_layers");
       if (!identity.ok) return identity.content;
@@ -1078,7 +1102,7 @@ export function registerTools(server: McpServer) {
       place_key: z.string().min(1).describe("placeKey from resolve_place. Required."),
     },
     async ({ place_key }) => {
-      const productGate = requireToolProduct("get_place_dossier");
+      const productGate = await requireToolProduct("get_place_dossier");
       if (!productGate.ok) return productGate.content;
       const identity = requireIdentifiedCaller("get_place_dossier");
       if (!identity.ok) return identity.content;
@@ -1141,7 +1165,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ submission_id }) => {
-      const gate = requireProduct("codex_finding_generation", "codex");
+      const gate = await requireProduct("codex_finding_generation", "codex");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1202,7 +1226,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ submission_id, include_status }) => {
-      const gate = requireProduct("codex_findings_fetch", "codex");
+      const gate = await requireProduct("codex_findings_fetch", "codex");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       const subject = getCurrentAccessSubject();
@@ -1341,7 +1365,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ finding_id, text, severity, category, reviewer_comment, citations }) => {
-      const gate = requireProduct("codex_override_write", "codex");
+      const gate = await requireProduct("codex_override_write", "codex");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1410,7 +1434,7 @@ export function registerTools(server: McpServer) {
         .describe("UUID of the engagement to fetch the briefing for. Required."),
     },
     async ({ engagement_id }) => {
-      const gate = requireProduct("codex_briefing_fetch", "codex");
+      const gate = await requireProduct("codex_briefing_fetch", "codex");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1484,7 +1508,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ engagement_id, note, discipline }) => {
-      const gate = requireProduct("codex_snapshot_ingest", "codex");
+      const gate = await requireProduct("codex_snapshot_ingest", "codex");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1580,7 +1604,7 @@ export function registerTools(server: McpServer) {
       revit_document_path,
       payload,
     }) => {
-      const gate = requireProduct("cortex_snapshot_register", "reporting");
+      const gate = await requireProduct("cortex_snapshot_register", "reporting");
       if (!gate.ok) return gate.content;
       if (!engagement_id && !project_name) {
         return errorContent(
@@ -1670,7 +1694,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ snapshot_id, filename, ifc_base64 }) => {
-      const gate = requireProduct("cortex_ifc_ingest", "reporting");
+      const gate = await requireProduct("cortex_ifc_ingest", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       let bytes: Buffer;
@@ -1739,7 +1763,7 @@ export function registerTools(server: McpServer) {
         .describe("UUID of the engagement. Required."),
     },
     async ({ engagement_id }) => {
-      const gate = requireProduct("cortex_bim_model_query", "reporting");
+      const gate = await requireProduct("cortex_bim_model_query", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1803,7 +1827,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ engagement_id, regenerate }) => {
-      const gate = requireProduct("cortex_briefing_emit", "reporting");
+      const gate = await requireProduct("cortex_briefing_emit", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1907,7 +1931,7 @@ export function registerTools(server: McpServer) {
       actor_id,
       principal_actor_id,
     }) => {
-      const gate = requireProduct("cortex_response_task_create", "reporting");
+      const gate = await requireProduct("cortex_response_task_create", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -1958,7 +1982,7 @@ export function registerTools(server: McpServer) {
         .describe("Target state. Required."),
     },
     async ({ response_task_id, state }) => {
-      const gate = requireProduct("cortex_response_task_update_state", "reporting");
+      const gate = await requireProduct("cortex_response_task_update_state", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2004,7 +2028,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ engagement_id, state }) => {
-      const gate = requireProduct("cortex_response_task_list", "reporting");
+      const gate = await requireProduct("cortex_response_task_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2050,7 +2074,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the finding to link the task to. Required."),
     },
     async ({ response_task_id, finding_id }) => {
-      const gate = requireProduct("cortex_response_task_link", "reporting");
+      const gate = await requireProduct("cortex_response_task_link", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2102,7 +2126,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ sheet_id }) => {
-      const gate = requireProduct("cortex_sheet_content_extraction_trigger", "reporting");
+      const gate = await requireProduct("cortex_sheet_content_extraction_trigger", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2145,7 +2169,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId / blob ref of the sheet. Required."),
     },
     async ({ sheet_id }) => {
-      const gate = requireProduct("cortex_sheet_content_extraction_fetch", "reporting");
+      const gate = await requireProduct("cortex_sheet_content_extraction_fetch", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2191,7 +2215,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ engagement_id, document_type }) => {
-      const gate = requireProduct("cortex_attached_document_list", "reporting");
+      const gate = await requireProduct("cortex_attached_document_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2233,7 +2257,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the attached-document atom. Required."),
     },
     async ({ attached_document_id }) => {
-      const gate = requireProduct("cortex_attached_document_fetch", "reporting");
+      const gate = await requireProduct("cortex_attached_document_fetch", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2324,7 +2348,7 @@ export function registerTools(server: McpServer) {
       actor_id,
       principal_actor_id,
     }) => {
-      const gate = requireProduct("cortex_deliverable_letter_create", "reporting");
+      const gate = await requireProduct("cortex_deliverable_letter_create", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2384,7 +2408,7 @@ export function registerTools(server: McpServer) {
       content: z.string().describe("Section body text. Required."),
     },
     async ({ letter_id, section_index, kind, heading, content }) => {
-      const gate = requireProduct("cortex_deliverable_letter_update_section", "reporting");
+      const gate = await requireProduct("cortex_deliverable_letter_update_section", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2462,7 +2486,7 @@ export function registerTools(server: McpServer) {
       finding_ids,
       adjudication_state_ids,
     }) => {
-      const gate = requireProduct("cortex_deliverable_letter_attach_provenance", "reporting");
+      const gate = await requireProduct("cortex_deliverable_letter_attach_provenance", "reporting");
       if (!gate.ok) return gate.content;
       if (
         response_task_ids === undefined &&
@@ -2521,7 +2545,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the deliverable letter. Required."),
     },
     async ({ letter_id }) => {
-      const gate = requireProduct("cortex_deliverable_letter_completeness_check", "reporting");
+      const gate = await requireProduct("cortex_deliverable_letter_completeness_check", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2564,7 +2588,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the deliverable letter to send. Required."),
     },
     async ({ letter_id }) => {
-      const gate = requireProduct("cortex_deliverable_letter_send", "reporting");
+      const gate = await requireProduct("cortex_deliverable_letter_send", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2678,7 +2702,7 @@ export function registerTools(server: McpServer) {
       actor_id,
       principal_actor_id,
     }) => {
-      const gate = requireProduct("cortex_detail_callout_spec_create", "reporting");
+      const gate = await requireProduct("cortex_detail_callout_spec_create", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2729,7 +2753,7 @@ export function registerTools(server: McpServer) {
         .describe("Target push state. Required."),
     },
     async ({ spec_id, push_state }) => {
-      const gate = requireProduct("cortex_detail_callout_spec_update_push_state", "reporting");
+      const gate = await requireProduct("cortex_detail_callout_spec_update_push_state", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2807,7 +2831,7 @@ export function registerTools(server: McpServer) {
         .describe("Opaque APS Design Automation work-item reference. Required."),
     },
     async ({ spec_id, aps_task_ref }) => {
-      const gate = requireProduct("cortex_detail_callout_spec_attach_aps_ref", "reporting");
+      const gate = await requireProduct("cortex_detail_callout_spec_attach_aps_ref", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2853,7 +2877,7 @@ export function registerTools(server: McpServer) {
         .describe("Optional push-state filter. Omit to list specs in every state."),
     },
     async ({ engagement_id, push_state }) => {
-      const gate = requireProduct("cortex_detail_callout_spec_list", "reporting");
+      const gate = await requireProduct("cortex_detail_callout_spec_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2895,7 +2919,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the detail-callout spec. Required."),
     },
     async ({ spec_id }) => {
-      const gate = requireProduct("cortex_detail_callout_spec_get", "reporting");
+      const gate = await requireProduct("cortex_detail_callout_spec_get", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -2989,7 +3013,7 @@ export function registerTools(server: McpServer) {
       actor_id,
       principal_actor_id,
     }) => {
-      const gate = requireProduct("cortex_product_spec_reference_create", "reporting");
+      const gate = await requireProduct("cortex_product_spec_reference_create", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3038,7 +3062,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the product-spec reference to refresh. Required."),
     },
     async ({ reference_id }) => {
-      const gate = requireProduct("cortex_product_spec_reference_refresh_status", "reporting");
+      const gate = await requireProduct("cortex_product_spec_reference_refresh_status", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3085,7 +3109,7 @@ export function registerTools(server: McpServer) {
         .describe("Optional ICC-ES status filter. Omit to list references in every status."),
     },
     async ({ engagement_id, status }) => {
-      const gate = requireProduct("cortex_product_spec_reference_list", "reporting");
+      const gate = await requireProduct("cortex_product_spec_reference_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3127,7 +3151,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the product-spec reference. Required."),
     },
     async ({ reference_id }) => {
-      const gate = requireProduct("cortex_product_spec_reference_get", "reporting");
+      const gate = await requireProduct("cortex_product_spec_reference_get", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3188,7 +3212,7 @@ export function registerTools(server: McpServer) {
         .describe("Actor who triggered the render (ADR-015). Omit for system renders."),
     },
     async ({ letter_id, format, rendered_by_actor_id }) => {
-      const gate = requireProduct("cortex_deliverable_letter_render", "reporting");
+      const gate = await requireProduct("cortex_deliverable_letter_render", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3253,7 +3277,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the deliverable letter. Required."),
     },
     async ({ letter_id }) => {
-      const gate = requireProduct("cortex_deliverable_letter_renders_list", "reporting");
+      const gate = await requireProduct("cortex_deliverable_letter_renders_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3312,7 +3336,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ engagement_id, status }) => {
-      const gate = requireProduct("cortex_deliverable_letter_list", "reporting");
+      const gate = await requireProduct("cortex_deliverable_letter_list", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3353,7 +3377,7 @@ export function registerTools(server: McpServer) {
         .describe("entityId of the deliverable letter. Required."),
     },
     async ({ letter_id }) => {
-      const gate = requireProduct("cortex_deliverable_letter_fetch", "reporting");
+      const gate = await requireProduct("cortex_deliverable_letter_fetch", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3395,7 +3419,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ render_id }) => {
-      const gate = requireProduct("cortex_deliverable_letter_render_download", "reporting");
+      const gate = await requireProduct("cortex_deliverable_letter_render_download", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3493,7 +3517,7 @@ export function registerTools(server: McpServer) {
         .describe("Brief voice: consumer (lay) or pro."),
     },
     async ({ address, mls_id, source, presentation_mode }) => {
-      const gate = requireProduct("generate_property_brief", "reporting");
+      const gate = await requireProduct("generate_property_brief", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       const started = Date.now();
@@ -3535,7 +3559,7 @@ export function registerTools(server: McpServer) {
         .describe("brief-run id from generate_property_brief. Required."),
     },
     async ({ run_id }) => {
-      const gate = requireProduct("get_property_brief_run", "reporting");
+      const gate = await requireProduct("get_property_brief_run", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3589,7 +3613,7 @@ export function registerTools(server: McpServer) {
       return_period_years,
       force_refresh,
     }) => {
-      const gate = requireProduct("simulate_site_drainage", "map");
+      const gate = await requireProduct("simulate_site_drainage", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3644,7 +3668,7 @@ export function registerTools(server: McpServer) {
         .describe("When true, attach NOAA Atlas 14 design-storm estimates."),
     },
     async ({ engagement_id, include_design_storms }) => {
-      const gate = requireProduct("get_site_drainage", "map");
+      const gate = await requireProduct("get_site_drainage", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3696,7 +3720,7 @@ export function registerTools(server: McpServer) {
         .describe("Passed to refresh when refresh=true."),
     },
     async ({ engagement_id, refresh, force_refresh }) => {
-      const gate = requireProduct("get_site_topography", "map");
+      const gate = await requireProduct("get_site_topography", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3742,7 +3766,7 @@ export function registerTools(server: McpServer) {
     async ({ engagementId, formats }) => {
       // NOTE: the Group B section header above says Gate: product='cortex';
       // that comment is stale. Map tools gate on "map"; follow the code.
-      const gate = requireProduct("generate_parcel_terrain_model", "map");
+      const gate = await requireProduct("generate_parcel_terrain_model", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3861,7 +3885,7 @@ export function registerTools(server: McpServer) {
         ),
     },
     async ({ workspace_did }) => {
-      const gate = requireProduct("search_encumbrances", "reporting");
+      const gate = await requireProduct("search_encumbrances", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3893,7 +3917,7 @@ export function registerTools(server: McpServer) {
         .describe("Property workspace DID. Required."),
     },
     async ({ workspace_did }) => {
-      const gate = requireProduct("get_restrictions", "reporting");
+      const gate = await requireProduct("get_restrictions", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3969,7 +3993,7 @@ export function registerTools(server: McpServer) {
     TOOL_COPY.get_property_detail,
     cotalityLocationSchema,
     async ({ address, lat, lng }) => {
-      const gate = requireProduct("get_property_detail", "reporting");
+      const gate = await requireProduct("get_property_detail", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -3989,7 +4013,7 @@ export function registerTools(server: McpServer) {
     TOOL_COPY.get_replacement_cost,
     cotalityLocationSchema,
     async ({ address, lat, lng }) => {
-      const gate = requireProduct("get_replacement_cost", "reporting");
+      const gate = await requireProduct("get_replacement_cost", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -4009,7 +4033,7 @@ export function registerTools(server: McpServer) {
     TOOL_COPY.get_hazard_profile,
     cotalityLocationSchema,
     async ({ address, lat, lng }) => {
-      const gate = requireProduct("get_hazard_profile", "map");
+      const gate = await requireProduct("get_hazard_profile", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -4029,7 +4053,7 @@ export function registerTools(server: McpServer) {
     TOOL_COPY.get_parcel_polygon,
     cotalityLocationSchema,
     async ({ address, lat, lng }) => {
-      const gate = requireProduct("get_parcel_polygon", "map");
+      const gate = await requireProduct("get_parcel_polygon", "map");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -4077,7 +4101,7 @@ export function registerTools(server: McpServer) {
         .describe("Max tiles to include, default 4."),
     },
     async ({ intent, engagement_id, available_tile_ids, max_tiles }) => {
-      const gate = requireProduct("compose_workspace", "reporting");
+      const gate = await requireProduct("compose_workspace", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       try {
@@ -4158,7 +4182,7 @@ export function registerTools(server: McpServer) {
       bbox: mapLayersBboxSchema.optional(),
     },
     async ({ parcel, jurisdiction, layers, force_refresh, bbox }) => {
-      const gate = requireProduct("assemble_map_layers", "map");
+      const gate = await requireProduct("assemble_map_layers", "map");
       if (!gate.ok) return gate.content;
       const pkgGate = assertMapLayersPackageGate("assemble_map_layers");
       if (!pkgGate.ok) return errorContent(pkgGate.message);
@@ -4239,7 +4263,7 @@ export function registerTools(server: McpServer) {
         .describe("When true, enrich export with atom_trace graph data."),
     },
     async ({ atom_id, include_trace }) => {
-      const gate = requireProduct("atom_export", "reporting");
+      const gate = await requireProduct("atom_export", "reporting");
       if (!gate.ok) return gate.content;
       const identity = requireIdentifiedCaller("atom_export");
       if (!identity.ok) return identity.content;
@@ -4303,7 +4327,7 @@ export function registerTools(server: McpServer) {
         .describe("Atom DID for overlay read-contract. Required."),
     },
     async ({ atom_id }) => {
-      const gate = requireProduct("read_atom_calibration", "reporting");
+      const gate = await requireProduct("read_atom_calibration", "reporting");
       if (!gate.ok) return gate.content;
       const tier = getCurrentTier();
       const ctx = getCurrentAuthContext();

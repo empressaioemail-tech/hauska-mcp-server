@@ -1,12 +1,12 @@
-// Layer 2 call metering tests (A4b).
+// Layer 2 call metering tests (observability fallback + Gate D dual-path).
 //
 // Validates metering behavior for product-gated tool calls:
 // - metered vs public-tool (never metered)
-// - no-stripe-key → unbilled log
-// - customer-mapped + stripe key → Stripe client called with meter payload
+// - SDK_METERING off → post-success observability recordLayer2Call
+// - Stripe meter path retired (see sdk-money-boundary.test.ts)
 // - admin PATCH schema validation
 //
-// Note: These tests focus on the logging and Stripe integration logic.
+// Note: These tests focus on the logging/observability path.
 // Full integration tests with DATABASE_URL would verify actual DB operations.
 
 import { strict as assert } from "node:assert";
@@ -121,15 +121,14 @@ test("logToolRead does NOT meter when no key_id (anonymous)", async () => {
 });
 
 test("admin PATCH schema accepts stripe_customer_id", () => {
-  // This test validates the TypeScript types compile correctly.
-  // The actual DB operations are integration-tested separately with DATABASE_URL.
+  // Legacy admin field retained for key rows; Stripe meter post is retired.
   const validPatch: {
     stripe_customer_id?: string | null;
     tier?: string;
   } = {
     stripe_customer_id: "cus_admin_test",
   };
-  
+
   const clearPatch: {
     stripe_customer_id?: string | null;
   } = {
@@ -140,10 +139,14 @@ test("admin PATCH schema accepts stripe_customer_id", () => {
   assert.ok(clearPatch, "stripe_customer_id should accept null");
 });
 
-test("metering module exports recordLayer2Call function", async () => {
+test("metering module exports recordLayer2Call and has no Stripe URL", async () => {
   const meteringModule = await import("../src/metering.js");
   assert.ok(
     typeof meteringModule.recordLayer2Call === "function",
     "recordLayer2Call should be exported",
   );
+  const src = await import("node:fs").then((fs) =>
+    fs.readFileSync(new URL("../src/metering.ts", import.meta.url), "utf8"),
+  );
+  assert.doesNotMatch(src, /api\.stripe\.com/);
 });
