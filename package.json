@@ -13,6 +13,7 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "gate-probe": "tsx scripts/gate-probe.ts",
     "migrate": "tsx scripts/migrate.ts",
+    "postinstall": "node scripts/patch-hauska-sdk-esm.mjs",
     "test:inspector": "npx @modelcontextprotocol/inspector http://localhost:3000/mcp"
   },
   "dependencies": {
