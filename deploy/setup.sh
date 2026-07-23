@@ -41,13 +41,30 @@ gcloud storage buckets add-iam-policy-binding "gs://$GCS_LOG_BUCKET" \
   --member="serviceAccount:$SA_EMAIL" --role="roles/storage.objectAdmin"
 
 echo "==> Secret Manager secrets (created empty; add versions after)"
+# Core runtime + Gate D Circle scaffold (values Nick-only; see deploy/secrets.md).
 for s in HAUSKA_ENGINE_API_KEY LEGACY_BACKEND_API_KEY LEGACY_SNAPSHOT_SECRET \
-         DATABASE_URL UPSTASH_REDIS_REST_TOKEN HAUSKA_ADMIN_BOOTSTRAP_KEY; do
+         DATABASE_URL UPSTASH_REDIS_REST_TOKEN HAUSKA_ADMIN_BOOTSTRAP_KEY \
+         GATE_CONTEXT_SIGNING_KEY \
+         CIRCLE_API_KEY CIRCLE_MERCHANT_WALLET_ID HAUSKA_CHECKOUT_BASE_URL \
+         CIRCLE_API_URL; do
   gcloud secrets create "$s" --project="$PROJECT_ID" \
     --replication-policy=automatic || echo "   ($s already exists)"
   gcloud secrets add-iam-policy-binding "$s" --project="$PROJECT_ID" \
     --member="serviceAccount:$SA_EMAIL" \
     --role="roles/secretmanager.secretAccessor" >/dev/null
+done
+
+# Ensure Circle secrets have a bindable version without inventing real keys.
+# Literal "absent" keeps Cloud Run --set-secrets valid; sdk-metering treats
+# absent/unset/pending as circleConfigured=false (sdk_metering_circle_absent).
+for s in CIRCLE_API_KEY CIRCLE_MERCHANT_WALLET_ID HAUSKA_CHECKOUT_BASE_URL CIRCLE_API_URL; do
+  VERSION_COUNT="$(gcloud secrets versions list "$s" --project="$PROJECT_ID" \
+    --filter='state=ENABLED' --format='value(name)' 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "${VERSION_COUNT:-0}" = "0" ]; then
+    printf '%s' 'absent' | gcloud secrets versions add "$s" \
+      --project="$PROJECT_ID" --data-file=- >/dev/null
+    echo "   seeded $s with placeholder 'absent' (Nick replaces with real value)"
+  fi
 done
 
 echo "==> Grant the Cloud Build service account deploy permissions"

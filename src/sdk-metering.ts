@@ -89,11 +89,21 @@ export function resetSdkMeteringGateForTests(): void {
   sdkLoaded = false;
 }
 
+/** True when env looks like a real Circle value (not scaffold placeholder). */
+function isPresentSecret(raw: string | undefined): boolean {
+  const v = raw?.trim().toLowerCase();
+  if (!v) return false;
+  if (v === "absent" || v === "unset" || v === "pending" || v === "replace-me") {
+    return false;
+  }
+  return true;
+}
+
 function circleConfigured(): boolean {
-  return Boolean(
-    process.env.CIRCLE_API_KEY?.trim() &&
-      process.env.CIRCLE_MERCHANT_WALLET_ID?.trim() &&
-      process.env.HAUSKA_CHECKOUT_BASE_URL?.trim(),
+  return (
+    isPresentSecret(process.env.CIRCLE_API_KEY) &&
+    isPresentSecret(process.env.CIRCLE_MERCHANT_WALLET_ID) &&
+    isPresentSecret(process.env.HAUSKA_CHECKOUT_BASE_URL)
   );
 }
 
