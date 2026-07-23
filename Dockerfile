@@ -12,6 +12,7 @@ WORKDIR /app
 # for a reproducible build. Copied separately from src so the dependency
 # layer caches across source-only changes.
 COPY package.json package-lock.json ./
+COPY scripts/patch-hauska-sdk-esm.mjs ./scripts/patch-hauska-sdk-esm.mjs
 RUN npm ci --no-audit --no-fund
 
 # Compile the server and build the static docs site (docs/site/).
@@ -28,6 +29,7 @@ WORKDIR /app
 
 # Production dependencies only.
 COPY package.json package-lock.json ./
+COPY scripts/patch-hauska-sdk-esm.mjs ./scripts/patch-hauska-sdk-esm.mjs
 RUN npm ci --omit=dev --no-audit --no-fund \
   && npm cache clean --force
 

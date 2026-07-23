@@ -115,6 +115,20 @@ test("tier adapter maps MCP bands onto SDK Decision B tiers", () => {
   assert.equal(mapMcpTierToSdkTier("embedder"), "pro");
 });
 
+test("patched @hauska-sdk/metering loads under Node ESM", async () => {
+  const metering = await import("@hauska-sdk/metering");
+  assert.equal(typeof metering.McpMeteringGate, "function");
+  assert.equal(typeof metering.InMemoryMeteringStore, "function");
+  const store = new metering.InMemoryMeteringStore();
+  const gate = new metering.McpMeteringGate({ store });
+  const allowed = await gate.authorizeCall({
+    keyId: "ci-esm-probe",
+    tier: "builder",
+    layer: 2,
+  });
+  assert.equal(allowed.allowed, true);
+});
+
 test("public-free logToolRead does not load @hauska-sdk/metering", async () => {
   resetSdkMeteringGateForTests();
   const prev = process.env.SDK_METERING;
