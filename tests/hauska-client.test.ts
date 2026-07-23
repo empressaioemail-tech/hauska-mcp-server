@@ -70,6 +70,28 @@ test("searchAtoms omits jurisdiction and entityType when not provided", async ()
   assert.equal(url.searchParams.has("limit"), false);
 });
 
+test("getPropertyAtomChain hits GET /property-nodes/:id/atom-chain and 404 returns null", async () => {
+  mockResponse = { status: 404, body: { error: "not found" } };
+  const res = await hauskaClient.getPropertyAtomChain({ parcelNodeId: "48209:156346" });
+  assert.equal(res, null);
+  const url = new URL(calls[0]!.url);
+  assert.ok(url.pathname.includes("/property-nodes/48209%3A156346/atom-chain"));
+});
+
+test("getPropertyAtomChain returns wire body on 200", async () => {
+  mockResponse = {
+    status: 200,
+    body: {
+      parcelNodeId: "48209:156346",
+      zoningFact: null,
+      setbackRule: null,
+      buildableEnvelope: null,
+    },
+  };
+  const res = await hauskaClient.getPropertyAtomChain({ parcelNodeId: "48209:156346" });
+  assert.equal(res?.parcelNodeId, "48209:156346");
+});
+
 test("getAtom URL-encodes the DID and includeComposition", async () => {
   mockResponse = { status: 200, body: { atom: null } };
   await hauskaClient.getAtom({

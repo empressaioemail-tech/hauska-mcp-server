@@ -80,6 +80,7 @@ const REPORTING_TOOLS = new Set([
 const PUBLIC_CATALOG_TOOLS = new Set([
   "search_atoms",
   "get_atom",
+  "get_property_atom_chain",
   "query_jurisdiction",
   "search_permit_atoms",
   "list_jurisdictions",

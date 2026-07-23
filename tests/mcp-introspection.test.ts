@@ -30,9 +30,10 @@ test("listIntrospectionTools returns wire-accurate catalog", async () => {
   assert.ok(catalog.total >= 60);
   assert.ok(catalog.tools.some((t) => t.name === "search_atoms"));
   assert.ok(catalog.tools.some((t) => t.name === "atom_trace"));
+  assert.ok(catalog.tools.some((t) => t.name === "get_property_atom_chain"));
   assert.equal(
     catalog.tools.filter((t) => t.gate === "access_policy").length,
-    6,
+    7,
   );
   assert.equal(
     catalog.by_product.public,

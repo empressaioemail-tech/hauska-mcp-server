@@ -23,6 +23,7 @@ import {
   generateBriefEnvelope,
   getAtomEnvelope,
   atomTraceEnvelope,
+  propertyAtomChainEnvelope,
   getBriefRunEnvelope,
   getPlaceDossierEnvelope,
   getPlaceLayersEnvelope,
@@ -109,6 +110,12 @@ import {
   getCurrentProduct,
   getCurrentTier,
 } from "./request-context.js";
+import {
+  PropertyAtomChainInputError,
+  chainStatusNote,
+  readableChainAtoms,
+  resolvePropertyAtomChain,
+} from "./property-atom-chain.js";
 
 const ATOM_DID_REGEX = /^did:hauska:[a-z-]+:[^\s]+$/;
 
@@ -475,6 +482,73 @@ export function registerTools(server: McpServer) {
         return envelopeContent(__readEnv);
       } catch (err) {
         return errorContent(describeEngineFailure("get_atom", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 2b: get_property_atom_chain
+  // Catalog path for property zoning-fact -> setback-rule -> envelope chain.
+  // WDLL 3.13(a): per-atom accessPolicy, not package/tier path.
+  // -----------------------------------------------------------------
+  server.tool(
+    "get_property_atom_chain",
+    TOOL_COPY.get_property_atom_chain,
+    {
+      parcel_node_id: z
+        .string()
+        .regex(/^\d{5}:\d+$/, "parcel_node_id must be county_fips:prop_id (e.g. 48209:156346)")
+        .optional()
+        .describe(
+          "Permanent parcel node id county_fips:prop_id (e.g. 48209:156346). Provide this OR atom_did.",
+        ),
+      atom_did: z
+        .string()
+        .regex(ATOM_DID_REGEX, "atom_did must be a Hauska DID")
+        .optional()
+        .describe(
+          "Any property-chain atom DID (zoning-fact, setback-rule, buildable-envelope, parcel-node). Provide this OR parcel_node_id.",
+        ),
+    },
+    async ({ parcel_node_id, atom_did }) => {
+      const tier = getCurrentTier();
+      if (!parcel_node_id && !atom_did) {
+        return errorContent(
+          "Provide parcel_node_id (e.g. 48209:156346) or atom_did for a property-chain atom.",
+        );
+      }
+      try {
+        const subject = getCurrentAccessSubject();
+        const data = await resolvePropertyAtomChain(
+          { parcelNodeId: parcel_node_id, atomDid: atom_did },
+          subject,
+          "get_property_atom_chain",
+        );
+        const readable = readableChainAtoms(data);
+        const note = chainStatusNote(data);
+        const __readEnv = finalizeReadEnvelope(
+          "get_property_atom_chain",
+          propertyAtomChainEnvelope(data, readable, { tier, note }),
+          readable[0]?.accessPolicy as AccessPolicy | undefined,
+        );
+        logToolRead(
+          {
+            tool: "get_property_atom_chain",
+            parcel_node_id: data.parcelNodeId,
+            tier,
+            status: data.status,
+            readable_count: readable.length,
+            pending_slots: data.pendingSlots,
+            withheld_slots: data.withheldSlots,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof PropertyAtomChainInputError) {
+          return errorContent(err.message);
+        }
+        return errorContent(describeEngineFailure("get_property_atom_chain", err));
       }
     },
   );
