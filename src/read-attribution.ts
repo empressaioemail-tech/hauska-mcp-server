@@ -18,6 +18,7 @@ import {
   isSdkMeteringEnabled,
   type AuthorizePaidCallResult,
 } from "./sdk-metering.js";
+import { accrueSourceObligations } from "./source-obligation-meter.js";
 
 /** Deduped DID list from envelope provenance entries. */
 export function atomIdsFromProvenance(
@@ -86,6 +87,25 @@ export function logToolRead(
     atom_ids_returned: atom_ids.length,
   });
 
+  // I-K inbound source-obligation meter: EVERY reference of an ICC-sourced
+  // atom accrues — free_anonymous included. Must run before the paid-only
+  // early return below. Does not load @hauska-sdk.
+  const requestId = getCurrentRequestId();
+  if (requestId && atom_ids.length > 0) {
+    const first = atoms[0];
+    const hints: ReadonlyArray<AtomProvenanceEntry | string> =
+      first !== undefined && typeof first !== "string"
+        ? (atoms as ReadonlyArray<AtomProvenanceEntry>)
+        : atom_ids;
+    accrueSourceObligations({
+      tool: fields.tool,
+      product: getCurrentProduct(),
+      tier: getCurrentTier(),
+      requestId,
+      atoms: hints,
+    });
+  }
+
   // Dual-path fallback only: when SDK metering flag is off, keep the
   // post-success observability row (no Stripe). When flag is on,
   // authorizePaidRead already recorded at authorize-time.
@@ -96,7 +116,6 @@ export function logToolRead(
   const ctx = getCurrentAuthContext();
   const product = getCurrentProduct();
   const tier = getCurrentTier();
-  const requestId = getCurrentRequestId();
 
   if (
     product !== "public" &&

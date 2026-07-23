@@ -36,6 +36,7 @@ import type {
   SearchResponse,
 } from "./hauska-client.js";
 import type { PropertyAtomChainData } from "./property-atom-chain.js";
+import { extractCitedAtomDid } from "./source-obligation-meter.js";
 import type {
   GetPlaceDossierResponse,
   GetPlaceLayersResponse,
@@ -69,6 +70,13 @@ export interface AtomProvenanceEntry {
   };
   sectionNumber?: string | null;
   score?: number;
+  /** Licensed-source actor DID when corpus stamps it (I-K inbound meter). */
+  sourceActorDid?: string | null;
+  sourceCitation?: string | null;
+  /** Explicit ICC / licensed-source stamp when present on the atom body. */
+  iccSourced?: boolean | null;
+  /** Setback cite of a code-section atom DID (sourceCodeAtomRef). */
+  citedAtomDid?: string | null;
 }
 
 const CID_NOTE =
@@ -103,6 +111,14 @@ export function provenanceFromSearchResult(
 export function provenanceFromAtom(
   atom: AtomInstanceBase,
 ): AtomProvenanceEntry {
+  const sourceActorDid =
+    typeof atom.sourceActorDid === "string" ? atom.sourceActorDid : null;
+  const sourceCitation =
+    typeof atom.sourceCitation === "string" ? atom.sourceCitation : null;
+  const iccSourced =
+    atom.iccSourced === true ||
+    atom.sourceLicensor === "icc" ||
+    atom.licensingStamp === "icc";
   return {
     did: `did:hauska:${atom.entityType}:${atom.entityId}`,
     entityType: atom.entityType,
@@ -115,6 +131,10 @@ export function provenanceFromAtom(
       url: atom.sourceUrl,
       fetchedAt: atom.fetchedAt,
     },
+    sourceActorDid,
+    sourceCitation,
+    iccSourced: iccSourced || null,
+    citedAtomDid: extractCitedAtomDid(atom),
   };
 }
 
