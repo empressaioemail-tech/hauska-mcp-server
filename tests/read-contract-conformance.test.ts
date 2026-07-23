@@ -25,6 +25,7 @@ import type { AtomSearchResult, JurisdictionStatusSnapshot } from "../src/hauska
 const READ_TOOLS = new Set([
   "search_atoms",
   "get_atom",
+  "get_property_atom_chain",
   "atom_trace",
   "query_jurisdiction",
   "search_permit_atoms",

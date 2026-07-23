@@ -35,6 +35,7 @@ import type {
   QueryJurisdictionResponse,
   SearchResponse,
 } from "./hauska-client.js";
+import type { PropertyAtomChainData } from "./property-atom-chain.js";
 import type {
   GetPlaceDossierResponse,
   GetPlaceLayersResponse,
@@ -201,6 +202,21 @@ export function getAtomEnvelope(
     }
   }
   return buildEnvelope(response, atoms, options);
+}
+
+export function propertyAtomChainEnvelope(
+  data: PropertyAtomChainData,
+  readableAtoms: AtomInstanceBase[],
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<PropertyAtomChainData> {
+  const atoms = readableAtoms.map(provenanceFromAtom);
+  const readKind =
+    data.status === "atom_path_pending" || data.status === "not_ready"
+      ? "empty"
+      : atoms.length > 0
+        ? "catalog"
+        : "empty";
+  return buildEnvelope(data, atoms, { ...options, readKind });
 }
 
 export function atomTraceEnvelope(

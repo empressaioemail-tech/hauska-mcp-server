@@ -47,6 +47,15 @@ export type CodeAtomEntityType =
   | "code-edition"
   | "jurisdiction-corpus";
 
+/** Property reasoning-chain entity types (Phase 1c catalog path). */
+export type PropertyAtomEntityType =
+  | "parcel-node"
+  | "zoning-fact"
+  | "setback-rule"
+  | "buildable-envelope";
+
+export type CatalogAtomEntityType = CodeAtomEntityType | PropertyAtomEntityType;
+
 /** Result row from `GET /search` and `GET /jurisdictions/:id/permits`. */
 export interface AtomSearchResult {
   atomDid: string;
@@ -71,7 +80,7 @@ export interface SearchResponse {
  * loosely typed and let the tool layer pass through unknown fields.
  */
 export interface AtomInstanceBase {
-  entityType: CodeAtomEntityType;
+  entityType: string;
   entityId: string;
   jurisdictionTenant: string;
   fetchedAt: string;
@@ -96,6 +105,14 @@ export interface GetAtomResponse {
     link: AtomLink;
     atom: AtomInstanceBase | null;
   }>;
+}
+
+/** Wire shape for GET /property-nodes/:parcelNodeId/atom-chain (when deployed). */
+export interface PropertyAtomChainWireResponse {
+  parcelNodeId: string;
+  zoningFact: AtomInstanceBase | null;
+  setbackRule: AtomInstanceBase | null;
+  buildableEnvelope: AtomInstanceBase | null;
 }
 
 export interface AtomTraceProvenance {
@@ -330,6 +347,24 @@ export const hauskaClient = {
       params.jurisdiction,
     )}/permits?${qs.toString()}`;
     return engineFetch<QueryJurisdictionResponse>(path);
+  },
+
+  /**
+   * Property-node reasoning chain (Phase 1c). Returns null on 404 when the
+   * retrieval-api route is not yet deployed — callers fall back to per-DID fetch.
+   */
+  async getPropertyAtomChain(params: {
+    parcelNodeId: string;
+  }): Promise<PropertyAtomChainWireResponse | null> {
+    const path = `/property-nodes/${encodeURIComponent(params.parcelNodeId)}/atom-chain`;
+    try {
+      return await engineFetch<PropertyAtomChainWireResponse>(path);
+    } catch (err) {
+      if (err instanceof EngineHttpError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
   },
 
   async getAtomTrace(params: {

@@ -3,7 +3,8 @@
 
 export const PUBLIC_TIER =
   "Tier: public Layer 1 (no API key). Example jurisdiction_key: bastrop-tx, grand-county-co. " +
-  "Typical failures: no_coverage (jurisdiction not in list_jurisdictions), empty_corpus, upstream_timeout.";
+  "Typical failures: no_coverage (jurisdiction not in list_jurisdictions), empty_corpus, upstream_timeout. " +
+  "Optional paid reads: send X-Hauska-Key header for public-paid atom visibility (per-atom accessPolicy, not package tier).";
 
 export const BROKERAGE_TIER =
   "Tier: product read (authenticated reporting API key). " +
@@ -36,8 +37,17 @@ export const TOOL_COPY = {
     PUBLIC_TIER,
 
   get_atom:
-    "Retrieve one code atom by DID (e.g. did:hauska:code-section:bastrop-tx/udc-2024/5.04) with full provenance. " +
+    "Retrieve one catalog atom by DID (code-section or property-chain types: zoning-fact, setback-rule, buildable-envelope, parcel-node) with full provenance. " +
     "Optional include_composition traverses atom-link children (definitions, cross-refs). " +
+    "Per-atom accessPolicy enforced post-fetch; optional X-Hauska-Key for public-paid visibility. " +
+    PUBLIC_TIER,
+
+  get_property_atom_chain:
+    "Retrieve the property reasoning-chain for a parcel: zoning-fact, setback-rule, and buildable-envelope atoms with stable DIDs. " +
+    "Input parcel_node_id (county_fips:prop_id, e.g. 48209:156346) OR any chain atom_did — returns the same three slots. " +
+    "Catalog-tool path: each atom filtered by its own accessPolicy (anonymous sees public-free only; public-paid envelope requires X-Hauska-Key with paid entitlement). " +
+    "Honest atom_path_pending when PROPERTY_ATOM_PATH corpus rows are absent — never fabricates values. " +
+    "Does not alter the reporting/map package path. " +
     PUBLIC_TIER,
 
   query_jurisdiction:
