@@ -53,7 +53,7 @@ afterEach(() => {
   delete process.env.COTALITY_CLIENT_SECRET;
 });
 
-function withCtx<T>(ctx: AuthContext, fn: () => T): T {
+function withCtx<T>(ctx: AuthContext, fn: () => T | Promise<T>): T | Promise<T> {
   return requestContext.run(ctx, fn);
 }
 
@@ -227,8 +227,8 @@ test("credentialPendingEnvelope carries operator message in meta.note", () => {
   assert.equal(env.meta.note, "OAuth not configured.");
 });
 
-test("requireProduct denies public key for generate_property_brief", () => {
-  withCtx(
+test("requireProduct denies public key for generate_property_brief", async () => {
+  await withCtx(
     {
       tier: "free_anonymous",
       product: "public",
@@ -236,15 +236,15 @@ test("requireProduct denies public key for generate_property_brief", () => {
       remaining_rpm: -1,
       remaining_daily: -1,
     },
-    () => {
-      const result = requireProduct("generate_property_brief", "reporting");
+    async () => {
+      const result = await requireProduct("generate_property_brief", "reporting");
       assert.equal(result.ok, false);
     },
   );
 });
 
-test("requireProduct allows reporting key for generate_property_brief", () => {
-  withCtx(
+test("requireProduct allows reporting key for generate_property_brief", async () => {
+  await withCtx(
     {
       tier: "developer_pro",
       product: "reporting",
@@ -253,8 +253,8 @@ test("requireProduct allows reporting key for generate_property_brief", () => {
       remaining_rpm: 100,
       remaining_daily: 1000,
     },
-    () => {
-      const result = requireProduct("generate_property_brief", "reporting");
+    async () => {
+      const result = await requireProduct("generate_property_brief", "reporting");
       assert.equal(result.ok, true);
     },
   );

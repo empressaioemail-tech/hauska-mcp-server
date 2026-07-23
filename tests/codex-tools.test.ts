@@ -31,8 +31,15 @@ function withCtx<T>(ctx: AuthContext, fn: () => T): T {
   return requestContext.run(ctx, fn);
 }
 
-test("requireProduct denies when no context is bound (defaults to public)", () => {
-  const result = requireProduct("codex_finding_generation", "codex");
+async function withCtxAsync<T>(
+  ctx: AuthContext,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return requestContext.run(ctx, fn);
+}
+
+test("requireProduct denies when no context is bound (defaults to public)", async () => {
+  const result = await requireProduct("codex_finding_generation", "codex");
   assert.equal(result.ok, false);
   if (!result.ok) {
     assert.equal(result.content.isError, true);
@@ -42,8 +49,8 @@ test("requireProduct denies when no context is bound (defaults to public)", () =
   }
 });
 
-test("requireProduct denies when bound product is public and expected is codex", () => {
-  withCtx(
+test("requireProduct denies when bound product is public and expected is codex", async () => {
+  await withCtxAsync(
     {
       tier: "free_anonymous",
       product: "public",
@@ -51,15 +58,15 @@ test("requireProduct denies when bound product is public and expected is codex",
       remaining_rpm: -1,
       remaining_daily: -1,
     },
-    () => {
-      const result = requireProduct("codex_override_write", "codex");
+    async () => {
+      const result = await requireProduct("codex_override_write", "codex");
       assert.equal(result.ok, false);
     },
   );
 });
 
-test("requireProduct allows when bound product matches expected", () => {
-  withCtx(
+test("requireProduct allows when bound product matches expected", async () => {
+  await withCtxAsync(
     {
       tier: "developer_pro",
       product: "codex",
@@ -68,15 +75,15 @@ test("requireProduct allows when bound product matches expected", () => {
       remaining_rpm: 100,
       remaining_daily: 1000,
     },
-    () => {
-      const result = requireProduct("codex_briefing_fetch", "codex");
+    async () => {
+      const result = await requireProduct("codex_briefing_fetch", "codex");
       assert.equal(result.ok, true);
     },
   );
 });
 
-test("requireProduct denies cross-product (reporting key cannot call codex tool)", () => {
-  withCtx(
+test("requireProduct denies cross-product (reporting key cannot call codex tool)", async () => {
+  await withCtxAsync(
     {
       tier: "developer_pro",
       product: "reporting",
@@ -84,15 +91,15 @@ test("requireProduct denies cross-product (reporting key cannot call codex tool)
       remaining_rpm: -1,
       remaining_daily: -1,
     },
-    () => {
-      const result = requireProduct("codex_snapshot_ingest", "codex");
+    async () => {
+      const result = await requireProduct("codex_snapshot_ingest", "codex");
       assert.equal(result.ok, false);
     },
   );
 });
 
-test("requireProduct allows reporting tool when bound product is reporting", () => {
-  withCtx(
+test("requireProduct allows reporting tool when bound product is reporting", async () => {
+  await withCtxAsync(
     {
       tier: "developer_pro",
       product: "reporting",
@@ -100,15 +107,15 @@ test("requireProduct allows reporting tool when bound product is reporting", () 
       remaining_rpm: -1,
       remaining_daily: -1,
     },
-    () => {
-      const result = requireProduct("cortex_snapshot_register", "reporting");
+    async () => {
+      const result = await requireProduct("cortex_snapshot_register", "reporting");
       assert.equal(result.ok, true);
     },
   );
 });
 
-test("requireProduct denies reporting tool when caller is codex-product", () => {
-  withCtx(
+test("requireProduct denies reporting tool when caller is codex-product", async () => {
+  await withCtxAsync(
     {
       tier: "developer_pro",
       product: "codex",
@@ -116,8 +123,8 @@ test("requireProduct denies reporting tool when caller is codex-product", () => 
       remaining_rpm: -1,
       remaining_daily: -1,
     },
-    () => {
-      const result = requireProduct("cortex_ifc_ingest", "reporting");
+    async () => {
+      const result = await requireProduct("cortex_ifc_ingest", "reporting");
       assert.equal(result.ok, false);
       if (!result.ok) {
         const message = result.content.content[0]?.text ?? "";
