@@ -36,6 +36,7 @@ import type {
   SearchResponse,
 } from "./hauska-client.js";
 import type { PropertyAtomChainData } from "./property-atom-chain.js";
+import type { ParcelTerrainExportToolData } from "./terrain-export-contract.js";
 import { extractCitedAtomDid } from "./source-obligation-meter.js";
 import type {
   GetPlaceDossierResponse,
@@ -237,6 +238,49 @@ export function propertyAtomChainEnvelope(
         ? "catalog"
         : "empty";
   return buildEnvelope(data, atoms, { ...options, readKind });
+}
+
+export function parcelTerrainExportEnvelope(
+  data: ParcelTerrainExportToolData,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<ParcelTerrainExportToolData> {
+  const atom = data.atom;
+  const fetchedAt =
+    typeof atom.fetchedAt === "string"
+      ? atom.fetchedAt
+      : new Date().toISOString();
+  const rawDid =
+    typeof atom.atomDid === "string"
+      ? atom.atomDid
+      : `did:hauska:parcel-terrain-model:${data.parcelNodeId}`;
+  const did = rawDid.startsWith("did:") ? rawDid : `did:hauska:parcel-terrain-model:${rawDid}`;
+  const jurisdictionTenant =
+    typeof atom.jurisdictionTenant === "string"
+      ? atom.jurisdictionTenant
+      : "property-spine";
+  const atoms: AtomProvenanceEntry[] = [
+    {
+      did,
+      entityType: "parcel-terrain-model",
+      entityId: data.parcelNodeId,
+      jurisdictionTenant,
+      contentHash:
+        typeof atom.contentHash === "string" ? atom.contentHash : null,
+      cidNote: CID_NOTE,
+      source: {
+        adapter:
+          typeof atom.sourceAdapter === "string"
+            ? atom.sourceAdapter
+            : "usgs:3dep-dem",
+        url:
+          typeof atom.sourceUrl === "string"
+            ? atom.sourceUrl
+            : "https://elevation.nationalmap.gov/3dep",
+        fetchedAt,
+      },
+    },
+  ];
+  return buildEnvelope(data, atoms, { ...options, readKind: "catalog" });
 }
 
 export function atomTraceEnvelope(

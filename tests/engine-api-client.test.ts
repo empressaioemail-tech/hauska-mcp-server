@@ -58,6 +58,62 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
+test("engine-api-client refreshParcelTerrainExport POSTs refresh with terrain-export gate headers", async () => {
+  process.env.HAUSKA_ENGINE_API_URL = "http://engine-api.test";
+  process.env.HAUSKA_ENGINE_API_GATE_TOKEN = "gate-secret";
+
+  await engineApiClient.refreshParcelTerrainExport(
+    "48021:27303",
+    { resolutionMeters: 1, contourIntervalMeters: 0.5 },
+    {
+      gateProduct: "cortex",
+      accessTier: "public-paid",
+      tenantId: "public-catalog",
+      gateCredentialId: "key-terrain",
+      requestId: "req-terrain-1",
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  const url = new URL(calls[0]!.url);
+  assert.equal(
+    url.origin + url.pathname,
+    "http://engine-api.test/v1/property-nodes/48021%3A27303/terrain-export/refresh",
+  );
+  assert.equal(calls[0]!.init?.method, "POST");
+  const headers = requestHeaders(calls[0]!.init);
+  assert.equal(headers[GATE_FRONT_HEADERS.product], "cortex");
+  assert.equal(headers[GATE_FRONT_HEADERS.packageId], "terrain-export");
+  assert.equal(headers[GATE_FRONT_HEADERS.accessTier], "public-paid");
+});
+
+test("engine-api-client downloadParcelTerrainExport GETs download with format query", async () => {
+  process.env.HAUSKA_ENGINE_API_URL = "http://engine-api.test";
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: { "content-type": "model/gltf-binary" },
+    });
+  }) as typeof fetch;
+
+  const out = await engineApiClient.downloadParcelTerrainExport(
+    "48021:27303",
+    "glb",
+    {
+      gateProduct: "cortex",
+      accessTier: "public-paid",
+      tenantId: "public-catalog",
+      gateCredentialId: "key-terrain",
+      requestId: "req-terrain-dl",
+    },
+  );
+
+  assert.equal(out.bytes.byteLength, 3);
+  assert.equal(out.contentType, "model/gltf-binary");
+  assert.match(calls[0]!.url, /terrain-export\/download\?format=glb/);
+});
+
 test("assembleMapLayers POSTs /v1/map-layers/assemble with gate-front headers", async () => {
   process.env.HAUSKA_ENGINE_API_URL = "http://engine-api.test";
   process.env.HAUSKA_ENGINE_API_GATE_TOKEN = "gate-secret";
