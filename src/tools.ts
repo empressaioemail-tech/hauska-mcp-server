@@ -24,6 +24,7 @@ import {
   getAtomEnvelope,
   atomTraceEnvelope,
   propertyAtomChainEnvelope,
+  parcelTerrainExportEnvelope,
   getBriefRunEnvelope,
   getPlaceDossierEnvelope,
   getPlaceLayersEnvelope,
@@ -75,6 +76,7 @@ import {
   type GtmErrorClass,
 } from "./gtm-observability.js";
 import { authorizePaidRead, logToolRead } from "./read-attribution.js";
+import { authorizePaidCall, isSdkMeteringEnabled } from "./sdk-metering.js";
 import { TOOL_COPY, CODEX_TIER, CORTEX_TIER, REPORTING_TIER, MAP_TIER } from "./tool-copy.js";
 import {
   EngineHttpError,
@@ -108,6 +110,7 @@ import {
   getCurrentAccessSubject,
   getCurrentAuthContext,
   getCurrentProduct,
+  getCurrentRequestId,
   getCurrentTier,
 } from "./request-context.js";
 import {
@@ -116,6 +119,14 @@ import {
   readableChainAtoms,
   resolvePropertyAtomChain,
 } from "./property-atom-chain.js";
+import {
+  isTerrainExportFormatDeferred,
+  TERRAIN_EXPORT_FORMATS,
+  TERRAIN_EXPORT_MAX_INLINE_BYTES,
+  terrainExportContentType,
+  terrainExportDownloadPath,
+  type TerrainExportFormat,
+} from "./terrain-export-contract.js";
 
 const ATOM_DID_REGEX = /^did:hauska:[a-z-]+:[^\s]+$/;
 
@@ -573,6 +584,201 @@ export function registerTools(server: McpServer) {
           return errorContent(err.message);
         }
         return errorContent(describeEngineFailure("get_property_atom_chain", err));
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 2c: refresh_parcel_terrain_export (Gate Y catalog paid path)
+  // WDLL terrain-ifc-spine item 5: public-paid terrain-export atom via
+  // engine-api; one authorizePaidCall per export request.
+  // -----------------------------------------------------------------
+  server.tool(
+    "refresh_parcel_terrain_export",
+    TOOL_COPY.refresh_parcel_terrain_export,
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          /^\d{5}:\d+$/,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48021:27303)",
+        )
+        .describe("Permanent parcel node id county_fips:prop_id. Required."),
+      format: z
+        .enum(TERRAIN_EXPORT_FORMATS)
+        .optional()
+        .describe(
+          "Optional artifact format to download after refresh (glb, ifc, dxf-3dface, dxf-contour, landxml-tin).",
+        ),
+      resolution_meters: z
+        .number()
+        .positive()
+        .optional()
+        .describe("Optional DEM resolution in meters forwarded to engine-api."),
+      contour_interval_meters: z
+        .number()
+        .positive()
+        .optional()
+        .describe("Optional contour interval in meters for dxf-contour."),
+    },
+    async ({
+      parcel_node_id,
+      format,
+      resolution_meters,
+      contour_interval_meters,
+    }) => {
+      const tool = "refresh_parcel_terrain_export";
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      const paidTarget = {
+        accessPolicy: "public-paid" as const,
+        jurisdictionTenant: "property-spine",
+        sharedWithTenants: [] as string[],
+      };
+      if (!canReadAccessTarget(subject, paidTarget)) {
+        logAccessDenied({
+          tool,
+          policy: "public-paid",
+          atomJurisdiction: paidTarget.jurisdictionTenant,
+          subjectTenant: subject.jurisdictionTenant,
+          platformInternal: subject.platformInternal,
+          reason: "terrain_export_paid_catalog",
+        });
+        return errorContent(
+          `${tool} requires a paid X-Hauska-Key (public-paid). Anonymous and free tiers cannot refresh terrain exports.`,
+        );
+      }
+
+      const identity = requireIdentifiedCaller(tool);
+      if (!identity.ok) return identity.content;
+
+      const authCtx = getCurrentAuthContext();
+      if (isSdkMeteringEnabled()) {
+        const meter = await authorizePaidCall({
+          keyId: authCtx!.key_id!,
+          keyHash: authCtx?.key_hash,
+          mcpTier: tier,
+          tool,
+          requestId: getCurrentRequestId(),
+          product: getCurrentProduct(),
+        });
+        if (!meter.allowed) {
+          logger.warn("tool_metering_denied", {
+            tool,
+            deny_reason: meter.denyReason ?? null,
+          });
+          return errorContent(
+            meter.denyMessage ??
+              `Metering denied for tool "${tool}". Upgrade or retry after quota resets.`,
+          );
+        }
+      }
+
+      const gateProduct = gateFrontProductFor(getCurrentProduct()) ?? "cortex";
+      const gate = {
+        gateProduct,
+        accessTier: "public-paid" as const,
+        tenantId:
+          resolveGateTenantId(authCtx) ??
+          authCtx?.key_id ??
+          "public-catalog",
+        gateCredentialId: authCtx!.key_id!,
+        requestId: getCurrentRequestId(),
+      };
+
+      try {
+        const refresh = await engineApiClient.refreshParcelTerrainExport(
+          parcel_node_id,
+          {
+            resolutionMeters: resolution_meters,
+            contourIntervalMeters: contour_interval_meters,
+          },
+          gate,
+        );
+
+        const data: import("./terrain-export-contract.js").ParcelTerrainExportToolData =
+          {
+            parcelNodeId: parcel_node_id,
+            atom: refresh.atom,
+            artifacts: refresh.artifacts,
+          };
+
+        if (format && !isTerrainExportFormatDeferred(refresh.artifacts, format)) {
+          const artifactEntry = refresh.artifacts[format];
+          const { bytes, contentType } =
+            await engineApiClient.downloadParcelTerrainExport(
+              parcel_node_id,
+              format,
+              gate,
+            );
+          const byteCount = bytes.byteLength;
+          const downloadPath = terrainExportDownloadPath(parcel_node_id, format);
+          if (byteCount <= TERRAIN_EXPORT_MAX_INLINE_BYTES) {
+            data.download = {
+              format,
+              contentType: contentType || terrainExportContentType(format),
+              base64: Buffer.from(bytes).toString("base64"),
+              byteCount,
+            };
+          } else {
+            data.download = {
+              format,
+              contentType: contentType || terrainExportContentType(format),
+              ref: artifactEntry?.ref ?? downloadPath,
+              byteCount,
+              downloadPath,
+            };
+          }
+        } else if (format && isTerrainExportFormatDeferred(refresh.artifacts, format)) {
+          const deferred = refresh.artifacts[format];
+          data.download = undefined;
+          data.artifacts = {
+            ...data.artifacts,
+            [format]: deferred ?? {
+              format,
+              deferred: true,
+              deferredReason: `${format} is deferred or unavailable for this parcel.`,
+            },
+          };
+        }
+
+        const __readEnv = finalizeReadEnvelope(
+          tool,
+          parcelTerrainExportEnvelope(data, {
+            tier,
+            readKind: "catalog",
+            note:
+              typeof refresh.atom.sourceCitation === "string"
+                ? `Source: ${refresh.atom.sourceCitation}. One SDK meter consumed per export request.`
+                : "Source: USGS 3DEP. One SDK meter consumed per export request.",
+          }),
+          "public-paid",
+        );
+        logToolRead(
+          {
+            tool,
+            parcel_node_id,
+            tier,
+            format: format ?? null,
+            artifact_count: Object.keys(refresh.artifacts).length,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Terrain export requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          return errorContent(
+            `Engine API rejected terrain export (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`,
+        );
       }
     },
   );

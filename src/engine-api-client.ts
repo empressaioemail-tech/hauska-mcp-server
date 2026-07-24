@@ -15,6 +15,13 @@ import {
   type MapLayersAssembleEngineEnvelope,
   type MapLayersAssembleRequest,
 } from "./map-layers-contract.js";
+import {
+  TERRAIN_EXPORT_PACKAGE_ID,
+  terrainExportDownloadPath,
+  type TerrainExportFormat,
+  type TerrainExportRefreshRequest,
+  type TerrainExportRefreshResponse,
+} from "./terrain-export-contract.js";
 import { buildSignedGateContext } from "./gate-context.js";
 
 const DEFAULT_ENGINE_API_URL = "http://localhost:8080";
@@ -147,6 +154,113 @@ async function engineApiFetch<T>(
   return (await res.json()) as T;
 }
 
+interface EngineApiGateContextInput {
+  gateHeaders: Record<string, string>;
+  gateContext?: {
+    tenant: string | null;
+    product: string;
+    tier: string;
+    platformInternal: boolean;
+  };
+  timeoutMs?: number;
+}
+
+async function engineApiFetchBytes(
+  path: string,
+  init: EngineApiGateContextInput,
+): Promise<{ bytes: Uint8Array; contentType: string }> {
+  const url = `${engineApiUrl()}${path}`;
+  const headers: Record<string, string> = {
+    accept: "*/*",
+    "user-agent": "hauska-mcp-server/0.1",
+    ...init.gateHeaders,
+  };
+  const token = engineApiGateToken();
+  if (token) headers.authorization = `Bearer ${token}`;
+
+  const key = gateSigningKey();
+  if (key && init.gateContext) {
+    try {
+      const { payload, signature } = buildSignedGateContext(
+        {
+          tenant: init.gateContext.tenant,
+          product: init.gateContext.product,
+          tier: init.gateContext.tier,
+          keyId: null,
+          platformInternal: init.gateContext.platformInternal,
+        },
+        key,
+      );
+      headers[GATE_CONTEXT_HEADER] = payload;
+      headers[GATE_SIGNATURE_HEADER] = signature;
+    } catch (err) {
+      logger.warn("gate_context_signing_failed", {
+        url,
+        error: String(err),
+      });
+    }
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    init.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  );
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    throw new EngineApiUnreachableError(url, err);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "<no-body>");
+    logger.warn("engine_api_http_error", {
+      url,
+      status: res.status,
+      body: body.slice(0, 500),
+    });
+    throw new EngineApiHttpError(res.status, url, body);
+  }
+
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const contentType =
+    res.headers.get("content-type")?.split(";")[0]?.trim() ??
+    "application/octet-stream";
+  return { bytes, contentType };
+}
+
+function gateContextFromGate(
+  gate: MapLayersAssembleGateContext,
+): EngineApiGateContextInput["gateContext"] {
+  return {
+    tenant: gate.tenantId,
+    product: gate.gateProduct,
+    tier: gate.accessTier,
+    platformInternal: gate.accessTier === "platform-internal",
+  };
+}
+
+function terrainExportGateHeaders(
+  gate: MapLayersAssembleGateContext,
+): Record<string, string> {
+  return gateFrontHeadersFromContext({
+    product: gate.gateProduct,
+    packageId: TERRAIN_EXPORT_PACKAGE_ID,
+    accessTier: gate.accessTier,
+    tenantId: gate.tenantId,
+    gateCredentialId: gate.gateCredentialId,
+    requestId: gate.requestId,
+  });
+}
+
 export interface MapLayersAssembleGateContext {
   gateProduct: GateFrontProduct;
   accessTier: GateFrontAccessTier;
@@ -215,5 +329,38 @@ export const engineApiClient = {
         },
       },
     );
+  },
+
+  async refreshParcelTerrainExport(
+    parcelNodeId: string,
+    request: TerrainExportRefreshRequest,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<TerrainExportRefreshResponse> {
+    const gateHeaders = terrainExportGateHeaders(gate);
+    const encoded = encodeURIComponent(parcelNodeId);
+    return engineApiFetch<TerrainExportRefreshResponse>(
+      `/v1/property-nodes/${encoded}/terrain-export/refresh`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          resolutionMeters: request.resolutionMeters,
+          contourIntervalMeters: request.contourIntervalMeters,
+        }),
+        gateHeaders,
+        gateContext: gateContextFromGate(gate),
+      },
+    );
+  },
+
+  async downloadParcelTerrainExport(
+    parcelNodeId: string,
+    format: TerrainExportFormat,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const gateHeaders = terrainExportGateHeaders(gate);
+    return engineApiFetchBytes(terrainExportDownloadPath(parcelNodeId, format), {
+      gateHeaders,
+      gateContext: gateContextFromGate(gate),
+    });
   },
 };

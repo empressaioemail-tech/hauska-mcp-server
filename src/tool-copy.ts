@@ -50,6 +50,15 @@ export const TOOL_COPY = {
     "Does not alter the reporting/map package path. " +
     PUBLIC_TIER,
 
+  refresh_parcel_terrain_export:
+    "Refresh and return the paid parcel-terrain-model atom (terrain-export spine) for county_fips:prop_id (e.g. 48021:27303). " +
+    "Formats: glb, ifc, dxf-3dface, dxf-contour, landxml-tin (honest defer when not shipped). " +
+    "USGS 3DEP sourced; accessPolicy public-paid. Catalog path — NOT the engagement map tool generate_parcel_terrain_model. " +
+    "Requires X-Hauska-Key with paid entitlement; anonymous and free tiers are denied. " +
+    "One SDK metering event (authorizePaidCall) per export request regardless of format count or optional download bytes. " +
+    "Optional format param triggers artifact download (inline base64 when small; ref + downloadPath when large). " +
+    PUBLIC_TIER,
+
   query_jurisdiction:
     "Per-jurisdiction status snapshot: loaded edition, quality bar, atom count, drift. " +
     "Confirm availability before search_atoms. Parcel-level zoning by address is not v1 — use resolve_place with a product key. " +
