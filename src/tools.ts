@@ -116,6 +116,7 @@ import {
 } from "./request-context.js";
 import {
   PropertyAtomChainInputError,
+  PARCEL_NODE_ID_REGEX,
   chainStatusNote,
   readableChainAtoms,
   resolvePropertyAtomChain,
@@ -541,7 +542,7 @@ export function registerTools(server: McpServer) {
     {
       parcel_node_id: z
         .string()
-        .regex(/^\d{5}:\d+$/, "parcel_node_id must be county_fips:prop_id (e.g. 48209:156346)")
+        .regex(PARCEL_NODE_ID_REGEX, "parcel_node_id must be county_fips:prop_id (e.g. 48209:156346)")
         .optional()
         .describe(
           "Permanent parcel node id county_fips:prop_id (e.g. 48209:156346). Provide this OR atom_did.",
@@ -609,7 +610,7 @@ export function registerTools(server: McpServer) {
       parcel_node_id: z
         .string()
         .regex(
-          /^\d{5}:\d+$/,
+          PARCEL_NODE_ID_REGEX,
           "parcel_node_id must be county_fips:prop_id (e.g. 48021:27303)",
         )
         .describe("Permanent parcel node id county_fips:prop_id. Required."),
@@ -814,7 +815,7 @@ export function registerTools(server: McpServer) {
       parcel_node_id: z
         .string()
         .regex(
-          /^\d{5}:\d+$/,
+          PARCEL_NODE_ID_REGEX,
           "parcel_node_id must be county_fips:prop_id (e.g. 48029:105129)",
         )
         .describe("Permanent parcel node id county_fips:prop_id. Required."),
