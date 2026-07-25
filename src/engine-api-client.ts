@@ -22,6 +22,13 @@ import {
   type TerrainExportRefreshRequest,
   type TerrainExportRefreshResponse,
 } from "./terrain-export-contract.js";
+import {
+  SITE_PLAN_EXPORT_PACKAGE_ID,
+  sitePlanExportDownloadPath,
+  type SitePlanExportFormat,
+  type SitePlanExportRefreshRequest,
+  type SitePlanExportRefreshResponse,
+} from "./site-plan-export-contract.js";
 import { buildSignedGateContext } from "./gate-context.js";
 
 const DEFAULT_ENGINE_API_URL = "http://localhost:8080";
@@ -261,6 +268,24 @@ function terrainExportGateHeaders(
   });
 }
 
+/**
+ * Site-plan export (Wave 3, WDLL 7-8): same public-paid gate shape as
+ * terrain-export, distinct packageId only so gate-front logging can tell
+ * the two paid catalog exports apart.
+ */
+function sitePlanExportGateHeaders(
+  gate: MapLayersAssembleGateContext,
+): Record<string, string> {
+  return gateFrontHeadersFromContext({
+    product: gate.gateProduct,
+    packageId: SITE_PLAN_EXPORT_PACKAGE_ID,
+    accessTier: gate.accessTier,
+    tenantId: gate.tenantId,
+    gateCredentialId: gate.gateCredentialId,
+    requestId: gate.requestId,
+  });
+}
+
 export interface MapLayersAssembleGateContext {
   gateProduct: GateFrontProduct;
   accessTier: GateFrontAccessTier;
@@ -359,6 +384,41 @@ export const engineApiClient = {
   ): Promise<{ bytes: Uint8Array; contentType: string }> {
     const gateHeaders = terrainExportGateHeaders(gate);
     return engineApiFetchBytes(terrainExportDownloadPath(parcelNodeId, format), {
+      gateHeaders,
+      gateContext: gateContextFromGate(gate),
+    });
+  },
+
+  async refreshParcelSitePlanExport(
+    parcelNodeId: string,
+    request: SitePlanExportRefreshRequest,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<SitePlanExportRefreshResponse> {
+    const gateHeaders = sitePlanExportGateHeaders(gate);
+    const encoded = encodeURIComponent(parcelNodeId);
+    return engineApiFetch<SitePlanExportRefreshResponse>(
+      `/v1/property-nodes/${encoded}/site-plan-export/refresh`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          resolutionMeters: request.resolutionMeters,
+          contourIntervalMeters: request.contourIntervalMeters,
+          address: request.address,
+          countyName: request.countyName,
+        }),
+        gateHeaders,
+        gateContext: gateContextFromGate(gate),
+      },
+    );
+  },
+
+  async downloadParcelSitePlanExport(
+    parcelNodeId: string,
+    format: SitePlanExportFormat,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const gateHeaders = sitePlanExportGateHeaders(gate);
+    return engineApiFetchBytes(sitePlanExportDownloadPath(parcelNodeId, format), {
       gateHeaders,
       gateContext: gateContextFromGate(gate),
     });

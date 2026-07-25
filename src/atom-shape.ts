@@ -37,6 +37,7 @@ import type {
 } from "./hauska-client.js";
 import type { PropertyAtomChainData } from "./property-atom-chain.js";
 import type { ParcelTerrainExportToolData } from "./terrain-export-contract.js";
+import type { ParcelSitePlanExportToolData } from "./site-plan-export-contract.js";
 import { extractCitedAtomDid } from "./source-obligation-meter.js";
 import type {
   GetPlaceDossierResponse,
@@ -276,6 +277,51 @@ export function parcelTerrainExportEnvelope(
           typeof atom.sourceUrl === "string"
             ? atom.sourceUrl
             : "https://elevation.nationalmap.gov/3dep",
+        fetchedAt,
+      },
+    },
+  ];
+  return buildEnvelope(data, atoms, { ...options, readKind: "catalog" });
+}
+
+export function parcelSitePlanExportEnvelope(
+  data: ParcelSitePlanExportToolData,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<ParcelSitePlanExportToolData> {
+  const atom = data.atom;
+  const fetchedAt =
+    typeof atom.fetchedAt === "string"
+      ? atom.fetchedAt
+      : new Date().toISOString();
+  const rawDid =
+    typeof atom.atomDid === "string"
+      ? atom.atomDid
+      : `did:hauska:parcel-terrain-model:${data.parcelNodeId}`;
+  const did = rawDid.startsWith("did:") ? rawDid : `did:hauska:parcel-terrain-model:${rawDid}`;
+  const jurisdictionTenant =
+    typeof atom.jurisdictionTenant === "string"
+      ? atom.jurisdictionTenant
+      : "property-spine";
+  // Site plan composes parcel ring, setback-rule, terrain mesh, and road
+  // anchors into one atom (same parcel-terrain-model entity the terrain
+  // export writes) — provenance entry stays on that atom, per-layer
+  // citations live in the CAD/PDF provenance panel, not duplicated here.
+  const atoms: AtomProvenanceEntry[] = [
+    {
+      did,
+      entityType: "parcel-terrain-model",
+      entityId: data.parcelNodeId,
+      jurisdictionTenant,
+      contentHash:
+        typeof atom.contentHash === "string" ? atom.contentHash : null,
+      cidNote: CID_NOTE,
+      source: {
+        adapter:
+          typeof atom.sourceAdapter === "string"
+            ? atom.sourceAdapter
+            : "engine:site-plan-composer",
+        url:
+          typeof atom.sourceUrl === "string" ? atom.sourceUrl : null,
         fetchedAt,
       },
     },
