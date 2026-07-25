@@ -37,7 +37,9 @@ export const PROPERTY_CHAIN_SLOT_TYPES = [
 
 export type PropertyChainSlot = (typeof PROPERTY_CHAIN_SLOT_TYPES)[number];
 
-export const PARCEL_NODE_ID_REGEX = /^\d{5}:\d+$/;
+/** G6 canonical id shape — must match PE `PARCEL_NODE_ID_SOURCE` (F1b). */
+export const PARCEL_NODE_ID_SOURCE = String.raw`^\d{5}:[^/\s]+$`;
+export const PARCEL_NODE_ID_REGEX = new RegExp(PARCEL_NODE_ID_SOURCE);
 
 export type PropertyAtomChainStatus =
   | "ready"
@@ -94,9 +96,10 @@ export function propertyChainAtomDid(
 
 /** Extract parcelNodeId from a property-chain atom DID, if shaped correctly. */
 export function parcelNodeIdFromAtomDid(atomDid: string): string | null {
-  const match = /^did:hauska:(?:parcel-node|zoning-fact|setback-rule|buildable-envelope):(\d{5}:\d+)$/.exec(
-    atomDid,
-  );
+  const match =
+    /^did:hauska:(?:parcel-node|zoning-fact|setback-rule|buildable-envelope):(\d{5}:[^/\s]+)$/.exec(
+      atomDid,
+    );
   return match?.[1] ?? null;
 }
 
