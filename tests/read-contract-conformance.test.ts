@@ -27,6 +27,7 @@ const READ_TOOLS = new Set([
   "get_atom",
   "get_property_atom_chain",
   "refresh_parcel_terrain_export",
+  "refresh_parcel_site_plan_export",
   "atom_trace",
   "query_jurisdiction",
   "search_permit_atoms",

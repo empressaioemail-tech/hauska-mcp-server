@@ -25,6 +25,7 @@ import {
   atomTraceEnvelope,
   propertyAtomChainEnvelope,
   parcelTerrainExportEnvelope,
+  parcelSitePlanExportEnvelope,
   getBriefRunEnvelope,
   getPlaceDossierEnvelope,
   getPlaceLayersEnvelope,
@@ -127,6 +128,14 @@ import {
   terrainExportDownloadPath,
   type TerrainExportFormat,
 } from "./terrain-export-contract.js";
+import {
+  isSitePlanExportFormatDeferred,
+  SITE_PLAN_EXPORT_FORMATS,
+  SITE_PLAN_EXPORT_MAX_INLINE_BYTES,
+  sitePlanExportContentType,
+  sitePlanExportDownloadPath,
+  type SitePlanExportFormat,
+} from "./site-plan-export-contract.js";
 
 const ATOM_DID_REGEX = /^did:hauska:[a-z-]+:[^\s]+$/;
 
@@ -774,6 +783,236 @@ export function registerTools(server: McpServer) {
         if (err instanceof EngineApiHttpError) {
           return errorContent(
             `Engine API rejected terrain export (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`,
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 2d: refresh_parcel_site_plan_export (Wave 3 pay-gate extension,
+  // site-plan-export sprint, WDLL items 7-8).
+  // Sibling of refresh_parcel_terrain_export above: SAME public-paid
+  // accessPolicy gate, SAME one-meter-per-export-request metering
+  // discipline via the shared SDK metering helper below — a distinct
+  // engine route (site-plan-export/*) and format set (dxf-site-plan,
+  // ifc-site-plan, pdf-site-plan) rather than an extension of the
+  // terrain-export tool, because the engine already ships the site-plan
+  // formats as a separate route group on the same parcel-terrain-model
+  // atom. No new SKU, no new metering shape — format/tier addition on
+  // the existing pay-gate. See
+  // _inbox/2026-07-25_site_plan_export_STATUS.md (Wave 3) for the
+  // decision record.
+  // -----------------------------------------------------------------
+  server.tool(
+    "refresh_parcel_site_plan_export",
+    TOOL_COPY.refresh_parcel_site_plan_export,
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          /^\d{5}:\d+$/,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48029:105129)",
+        )
+        .describe("Permanent parcel node id county_fips:prop_id. Required."),
+      format: z
+        .enum(SITE_PLAN_EXPORT_FORMATS)
+        .optional()
+        .describe(
+          "Optional artifact format to download after refresh (dxf-site-plan, ifc-site-plan, pdf-site-plan).",
+        ),
+      resolution_meters: z
+        .number()
+        .positive()
+        .optional()
+        .describe("Optional DEM resolution in meters forwarded to engine-api."),
+      contour_interval_meters: z
+        .number()
+        .positive()
+        .optional()
+        .describe("Optional contour interval in meters for the CONTOUR layer."),
+      address: z
+        .string()
+        .optional()
+        .describe(
+          "Optional caller-supplied street address for the PDF summary block. Never fabricated by the engine when omitted.",
+        ),
+      county_name: z
+        .string()
+        .optional()
+        .describe(
+          "Optional caller-supplied county name for the PDF summary block. Never fabricated by the engine when omitted.",
+        ),
+    },
+    async ({
+      parcel_node_id,
+      format,
+      resolution_meters,
+      contour_interval_meters,
+      address,
+      county_name,
+    }) => {
+      const tool = "refresh_parcel_site_plan_export";
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      const paidTarget = {
+        accessPolicy: "public-paid" as const,
+        jurisdictionTenant: "property-spine",
+        sharedWithTenants: [] as string[],
+      };
+      if (!canReadAccessTarget(subject, paidTarget)) {
+        logAccessDenied({
+          tool,
+          policy: "public-paid",
+          atomJurisdiction: paidTarget.jurisdictionTenant,
+          subjectTenant: subject.jurisdictionTenant,
+          platformInternal: subject.platformInternal,
+          reason: "site_plan_export_paid_catalog",
+        });
+        return errorContent(
+          `${tool} requires a paid X-Hauska-Key (public-paid). Anonymous and free tiers cannot refresh site-plan exports.`,
+        );
+      }
+
+      const identity = requireIdentifiedCaller(tool);
+      if (!identity.ok) return identity.content;
+
+      const authCtx = getCurrentAuthContext();
+      if (isSdkMeteringEnabled()) {
+        const meter = await authorizePaidCall({
+          keyId: authCtx!.key_id!,
+          keyHash: authCtx?.key_hash,
+          mcpTier: tier,
+          tool,
+          requestId: getCurrentRequestId(),
+          product: getCurrentProduct(),
+        });
+        if (!meter.allowed) {
+          logger.warn("tool_metering_denied", {
+            tool,
+            deny_reason: meter.denyReason ?? null,
+          });
+          return errorContent(
+            meter.denyMessage ??
+              `Metering denied for tool "${tool}". Upgrade or retry after quota resets.`,
+          );
+        }
+      }
+
+      const gateProduct = gateFrontProductFor(getCurrentProduct()) ?? "cortex";
+      const gate = {
+        gateProduct,
+        accessTier: "public-paid" as const,
+        tenantId:
+          resolveGateTenantId(authCtx) ??
+          authCtx?.key_id ??
+          "public-catalog",
+        gateCredentialId: authCtx!.key_id!,
+        requestId: getCurrentRequestId(),
+      };
+
+      try {
+        const refresh = await engineApiClient.refreshParcelSitePlanExport(
+          parcel_node_id,
+          {
+            resolutionMeters: resolution_meters,
+            contourIntervalMeters: contour_interval_meters,
+            address,
+            countyName: county_name,
+          },
+          gate,
+        );
+
+        const data: import("./site-plan-export-contract.js").ParcelSitePlanExportToolData =
+          {
+            parcelNodeId: parcel_node_id,
+            atom: refresh.atom,
+            artifacts: refresh.artifacts,
+            setbackDegenerate: refresh.setbackDegenerate,
+            setbackDegenerateReason: refresh.setbackDegenerateReason,
+            streetHonestAbsence: refresh.streetHonestAbsence,
+            zoningHonestAbsence: refresh.zoningHonestAbsence,
+            floodZoneHonestUnavailable: refresh.floodZoneHonestUnavailable,
+          };
+
+        if (format && !isSitePlanExportFormatDeferred(refresh.artifacts, format)) {
+          const artifactEntry = refresh.artifacts[format];
+          const { bytes, contentType } =
+            await engineApiClient.downloadParcelSitePlanExport(
+              parcel_node_id,
+              format,
+              gate,
+            );
+          const byteCount = bytes.byteLength;
+          const downloadPath = sitePlanExportDownloadPath(parcel_node_id, format);
+          if (byteCount <= SITE_PLAN_EXPORT_MAX_INLINE_BYTES) {
+            data.download = {
+              format,
+              contentType: contentType || sitePlanExportContentType(format),
+              base64: Buffer.from(bytes).toString("base64"),
+              byteCount,
+            };
+          } else {
+            data.download = {
+              format,
+              contentType: contentType || sitePlanExportContentType(format),
+              ref: artifactEntry?.ref ?? downloadPath,
+              byteCount,
+              downloadPath,
+            };
+          }
+        } else if (format && isSitePlanExportFormatDeferred(refresh.artifacts, format)) {
+          const deferred = refresh.artifacts[format];
+          data.download = undefined;
+          data.artifacts = {
+            ...data.artifacts,
+            [format]: deferred ?? {
+              format,
+              deferred: true,
+              deferredReason: `${format} is deferred or unavailable for this parcel.`,
+            },
+          };
+        }
+
+        const __readEnv = finalizeReadEnvelope(
+          tool,
+          parcelSitePlanExportEnvelope(data, {
+            tier,
+            readKind: "catalog",
+            note:
+              "Derived from public GIS records. Not a boundary survey. Not for legal record. " +
+              "One SDK meter consumed per export request regardless of format count.",
+          }),
+          "public-paid",
+        );
+        logToolRead(
+          {
+            tool,
+            parcel_node_id,
+            tier,
+            format: format ?? null,
+            artifact_count: Object.keys(refresh.artifacts).length,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Site-plan export requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          if (err.status === 422) {
+            return errorContent(
+              `Engine API rejected site-plan export (422 — setback-rule missing, engine refuses to fabricate F/S/R): ${err.body.slice(0, 200)}`,
+            );
+          }
+          return errorContent(
+            `Engine API rejected site-plan export (${err.status}): ${err.body.slice(0, 200)}`,
           );
         }
         return errorContent(

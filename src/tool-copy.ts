@@ -59,6 +59,17 @@ export const TOOL_COPY = {
     "Optional format param triggers artifact download (inline base64 when small; ref + downloadPath when large). " +
     PUBLIC_TIER,
 
+  refresh_parcel_site_plan_export:
+    "Refresh and return the paid site-plan export (layered DXF, layered IFC with solid terrain mass, PDF sheet) for county_fips:prop_id (e.g. 48029:105129). " +
+    "Formats: dxf-site-plan, ifc-site-plan, pdf-site-plan — one shared site model (parcel ring, setback-rule F/S/R, terrain mesh NAVD88, road anchors) so CAD and PDF cannot diverge. " +
+    "Fails closed 422 if no setback-rule atom exists for the parcel; never fabricates front/side/rear values. " +
+    "Sibling of refresh_parcel_terrain_export — SAME public-paid gate and SAME authorizePaidCall metering helper, distinct engine route and format set. " +
+    "Requires X-Hauska-Key with paid entitlement; anonymous and free tiers are denied. " +
+    "One SDK metering event (authorizePaidCall) per export request regardless of format count. " +
+    "Optional format param triggers artifact download (inline base64 when small; ref + downloadPath when large). " +
+    "Not survey-grade — derived from public GIS records, honesty line carried on the PDF sheet. " +
+    PUBLIC_TIER,
+
   query_jurisdiction:
     "Per-jurisdiction status snapshot: loaded edition, quality bar, atom count, drift. " +
     "Confirm availability before search_atoms. Parcel-level zoning by address is not v1 — use resolve_place with a product key. " +
