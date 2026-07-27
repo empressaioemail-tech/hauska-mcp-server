@@ -1024,6 +1024,311 @@ export function registerTools(server: McpServer) {
   );
 
   // -----------------------------------------------------------------
+  // Tool 2e: download_parcel_site_plan_export
+  //
+  // Streams the bytes for one already-refreshed site-plan artifact back to
+  // the caller as base64. The refresh tool inlines artifacts under
+  // SITE_PLAN_EXPORT_MAX_INLINE_BYTES (256 KiB); larger CAD/PDF artifacts
+  // (a PDF site-plan sheet is ~430 KiB) return a ref only, and the caller
+  // must fetch them separately. This tool is that separate hop.
+  //
+  // Why it exists: engine-api accepts ONLY gate-signed calls (the
+  // X-Hauska-Gate-Context / X-Hauska-Gate-Signature pair produced from
+  // GATE_CONTEXT_SIGNING_KEY, which lives only here in the gate). A BFF
+  // that calls engine-api directly with a Bearer token and plain gate-front
+  // headers is rejected with gate_front_context_required. So the download
+  // hop must run through the gate too, exactly like the refresh hop.
+  //
+  // SAME public-paid gate as the refresh tool. NOT metered: the SDK meter is
+  // consumed once at refresh time; the download is the cheap second hop of
+  // that same paid request (mirrors cortex_deliverable_letter_render_download,
+  // which gates but does not meter). Returns the bytes in data.download as
+  // { format, contentType, base64, byteCount } so BFF callers reuse the same
+  // inline-download extractor they use for the refresh response.
+  // -----------------------------------------------------------------
+  server.tool(
+    "download_parcel_site_plan_export",
+    "Download the bytes for one already-refreshed site-plan export artifact " +
+      "(dxf-site-plan, ifc-site-plan, pdf-site-plan). Gate-signed proxy to " +
+      "engine-api; returns the file as base64 with its content type. Call " +
+      "refresh_parcel_site_plan_export first to build the artifacts. " +
+      "public-paid; one SDK meter is consumed at refresh, not here.",
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          PARCEL_NODE_ID_REGEX,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48029:105129)",
+        )
+        .describe("Permanent parcel node id county_fips:prop_id. Required."),
+      format: z
+        .enum(SITE_PLAN_EXPORT_FORMATS)
+        .describe(
+          "Artifact format to download (dxf-site-plan, ifc-site-plan, pdf-site-plan). Required.",
+        ),
+    },
+    async ({ parcel_node_id, format }) => {
+      const tool = "download_parcel_site_plan_export";
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      const paidTarget = {
+        accessPolicy: "public-paid" as const,
+        jurisdictionTenant: "property-spine",
+        sharedWithTenants: [] as string[],
+      };
+      if (!canReadAccessTarget(subject, paidTarget)) {
+        logAccessDenied({
+          tool,
+          policy: "public-paid",
+          atomJurisdiction: paidTarget.jurisdictionTenant,
+          subjectTenant: subject.jurisdictionTenant,
+          platformInternal: subject.platformInternal,
+          reason: "site_plan_export_download_paid_catalog",
+        });
+        return errorContent(
+          `${tool} requires a paid X-Hauska-Key (public-paid). Anonymous and free tiers cannot download site-plan exports.`,
+        );
+      }
+
+      const identity = requireIdentifiedCaller(tool);
+      if (!identity.ok) return identity.content;
+
+      const authCtx = getCurrentAuthContext();
+      const gateProduct = gateFrontProductFor(getCurrentProduct()) ?? "cortex";
+      const gate = {
+        gateProduct,
+        accessTier: "public-paid" as const,
+        tenantId:
+          resolveGateTenantId(authCtx) ??
+          authCtx?.key_id ??
+          "public-catalog",
+        gateCredentialId: authCtx!.key_id!,
+        requestId: getCurrentRequestId(),
+      };
+
+      try {
+        const { bytes, contentType } =
+          await engineApiClient.downloadParcelSitePlanExport(
+            parcel_node_id,
+            format,
+            gate,
+          );
+        const byteCount = bytes.byteLength;
+        const data = {
+          parcelNodeId: parcel_node_id,
+          download: {
+            format,
+            contentType: contentType || sitePlanExportContentType(format),
+            base64: Buffer.from(bytes).toString("base64"),
+            byteCount,
+          },
+        };
+        const __readEnv = finalizeReadEnvelope(
+          tool,
+          buildEnvelope(
+            data,
+            [
+              {
+                did: `did:hauska:site-plan-export:${parcel_node_id}:${format}`,
+                entityType: "parcel-site-plan-export-artifact",
+                entityId: parcel_node_id,
+                jurisdictionTenant: "property-spine",
+                contentHash: null,
+                cidNote:
+                  "Binary artifact returned as base64; derived from public GIS records.",
+                source: {
+                  adapter: "engine-api",
+                  url: sitePlanExportDownloadPath(parcel_node_id, format),
+                  fetchedAt: new Date().toISOString(),
+                },
+              },
+            ],
+            { tier, readKind: "catalog" },
+          ),
+          "public-paid",
+        );
+        logToolRead(
+          {
+            tool,
+            parcel_node_id,
+            tier,
+            format,
+            byte_length: byteCount,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Site-plan export download requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          if (err.status === 404) {
+            return errorContent(
+              `Site-plan artifact not found (404) for ${parcel_node_id} format ${format}. ` +
+                "Call refresh_parcel_site_plan_export first to build it.",
+            );
+          }
+          return errorContent(
+            `Engine API rejected site-plan export download (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`,
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 2f: download_parcel_terrain_export
+  //
+  // Terrain sibling of download_parcel_site_plan_export. SAME public-paid
+  // gate, SAME gate-signed engine hop, SAME not-metered discipline. Streams
+  // one already-refreshed terrain artifact (glb, ifc, dxf-3dface,
+  // dxf-contour, landxml-tin) back as base64. Terrain meshes routinely
+  // exceed the 256 KiB inline cap, so the BFF must download through the
+  // gate here rather than calling engine-api directly.
+  // -----------------------------------------------------------------
+  server.tool(
+    "download_parcel_terrain_export",
+    "Download the bytes for one already-refreshed terrain export artifact " +
+      "(glb, ifc, dxf-3dface, dxf-contour, landxml-tin). Gate-signed proxy " +
+      "to engine-api; returns the file as base64 with its content type. Call " +
+      "refresh_parcel_terrain_export first to build the artifacts. " +
+      "public-paid; one SDK meter is consumed at refresh, not here.",
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          PARCEL_NODE_ID_REGEX,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48021:27303)",
+        )
+        .describe("Permanent parcel node id county_fips:prop_id. Required."),
+      format: z
+        .enum(TERRAIN_EXPORT_FORMATS)
+        .describe(
+          "Artifact format to download (glb, ifc, dxf-3dface, dxf-contour, landxml-tin). Required.",
+        ),
+    },
+    async ({ parcel_node_id, format }) => {
+      const tool = "download_parcel_terrain_export";
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      const paidTarget = {
+        accessPolicy: "public-paid" as const,
+        jurisdictionTenant: "property-spine",
+        sharedWithTenants: [] as string[],
+      };
+      if (!canReadAccessTarget(subject, paidTarget)) {
+        logAccessDenied({
+          tool,
+          policy: "public-paid",
+          atomJurisdiction: paidTarget.jurisdictionTenant,
+          subjectTenant: subject.jurisdictionTenant,
+          platformInternal: subject.platformInternal,
+          reason: "terrain_export_download_paid_catalog",
+        });
+        return errorContent(
+          `${tool} requires a paid X-Hauska-Key (public-paid). Anonymous and free tiers cannot download terrain exports.`,
+        );
+      }
+
+      const identity = requireIdentifiedCaller(tool);
+      if (!identity.ok) return identity.content;
+
+      const authCtx = getCurrentAuthContext();
+      const gateProduct = gateFrontProductFor(getCurrentProduct()) ?? "cortex";
+      const gate = {
+        gateProduct,
+        accessTier: "public-paid" as const,
+        tenantId:
+          resolveGateTenantId(authCtx) ??
+          authCtx?.key_id ??
+          "public-catalog",
+        gateCredentialId: authCtx!.key_id!,
+        requestId: getCurrentRequestId(),
+      };
+
+      try {
+        const { bytes, contentType } =
+          await engineApiClient.downloadParcelTerrainExport(
+            parcel_node_id,
+            format,
+            gate,
+          );
+        const byteCount = bytes.byteLength;
+        const data = {
+          parcelNodeId: parcel_node_id,
+          download: {
+            format,
+            contentType: contentType || terrainExportContentType(format),
+            base64: Buffer.from(bytes).toString("base64"),
+            byteCount,
+          },
+        };
+        const __readEnv = finalizeReadEnvelope(
+          tool,
+          buildEnvelope(
+            data,
+            [
+              {
+                did: `did:hauska:terrain-export:${parcel_node_id}:${format}`,
+                entityType: "parcel-terrain-export-artifact",
+                entityId: parcel_node_id,
+                jurisdictionTenant: "property-spine",
+                contentHash: null,
+                cidNote:
+                  "Binary artifact returned as base64; derived from USGS 3DEP and public GIS records.",
+                source: {
+                  adapter: "engine-api",
+                  url: terrainExportDownloadPath(parcel_node_id, format),
+                  fetchedAt: new Date().toISOString(),
+                },
+              },
+            ],
+            { tier, readKind: "catalog" },
+          ),
+          "public-paid",
+        );
+        logToolRead(
+          {
+            tool,
+            parcel_node_id,
+            tier,
+            format,
+            byte_length: byteCount,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Terrain export download requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          if (err.status === 404) {
+            return errorContent(
+              `Terrain artifact not found (404) for ${parcel_node_id} format ${format}. ` +
+                "Call refresh_parcel_terrain_export first to build it.",
+            );
+          }
+          return errorContent(
+            `Engine API rejected terrain export download (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`,
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
   // Tool 3: query_jurisdiction
   // Jurisdiction-scoped lookup. v1 returns the loaded edition + quality
   // bar. Parcel-level lookups (zoning, setbacks by parcel) are Bump 2;
