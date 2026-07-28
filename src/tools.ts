@@ -934,6 +934,8 @@ export function registerTools(server: McpServer) {
             artifacts: refresh.artifacts,
             setbackDegenerate: refresh.setbackDegenerate,
             setbackDegenerateReason: refresh.setbackDegenerateReason,
+            setbackHonestAbsence: refresh.setbackHonestAbsence,
+            setbackHonestAbsenceReason: refresh.setbackHonestAbsenceReason,
             streetHonestAbsence: refresh.streetHonestAbsence,
             zoningHonestAbsence: refresh.zoningHonestAbsence,
             floodZoneHonestUnavailable: refresh.floodZoneHonestUnavailable,

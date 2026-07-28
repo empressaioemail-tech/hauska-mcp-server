@@ -39,6 +39,9 @@ export interface SitePlanExportRefreshResponse {
   artifacts: Record<string, SitePlanExportArtifactEntry>;
   setbackDegenerate?: boolean;
   setbackDegenerateReason?: string;
+  /** No setback-rule atom on file — exported honest-absent, not an error. */
+  setbackHonestAbsence?: boolean;
+  setbackHonestAbsenceReason?: string;
   streetHonestAbsence?: boolean;
   zoningHonestAbsence?: boolean;
   floodZoneHonestUnavailable?: boolean;
@@ -70,6 +73,9 @@ export interface ParcelSitePlanExportToolData {
   download?: SitePlanExportDownloadPayload;
   setbackDegenerate?: boolean;
   setbackDegenerateReason?: string;
+  /** No setback-rule atom on file — exported honest-absent, not an error. */
+  setbackHonestAbsence?: boolean;
+  setbackHonestAbsenceReason?: string;
   streetHonestAbsence?: boolean;
   zoningHonestAbsence?: boolean;
   floodZoneHonestUnavailable?: boolean;
