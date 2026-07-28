@@ -50,6 +50,7 @@ import { assembleDownloadableAtomExport } from "./atom-export.js";
 import { checkReadToolConformance } from "./conformance-check.js";
 import {
   EngineApiHttpError,
+  EngineApiTimeoutError,
   EngineApiUnreachableError,
   engineApiClient,
 } from "./engine-api-client.js";
@@ -776,6 +777,11 @@ export function registerTools(server: McpServer) {
         );
         return envelopeContent(__readEnv);
       } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry the export in a moment.`,
+          );
+        }
         if (err instanceof EngineApiUnreachableError) {
           return errorContent(
             `Engine API unreachable at ${err.url}. Terrain export requires engine-api.`,
@@ -1003,6 +1009,11 @@ export function registerTools(server: McpServer) {
         );
         return envelopeContent(__readEnv);
       } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry the export in a moment.`,
+          );
+        }
         if (err instanceof EngineApiUnreachableError) {
           return errorContent(
             `Engine API unreachable at ${err.url}. Site-plan export requires engine-api.`,
@@ -1161,6 +1172,11 @@ export function registerTools(server: McpServer) {
         );
         return envelopeContent(__readEnv);
       } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry the download in a moment.`,
+          );
+        }
         if (err instanceof EngineApiUnreachableError) {
           return errorContent(
             `Engine API unreachable at ${err.url}. Site-plan export download requires engine-api.`,
@@ -1307,6 +1323,11 @@ export function registerTools(server: McpServer) {
         );
         return envelopeContent(__readEnv);
       } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry the download in a moment.`,
+          );
+        }
         if (err instanceof EngineApiUnreachableError) {
           return errorContent(
             `Engine API unreachable at ${err.url}. Terrain export download requires engine-api.`,
@@ -4981,6 +5002,11 @@ export function registerTools(server: McpServer) {
         }, __readEnv.atoms);
         return envelopeContent(__readEnv);
       } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry in a moment.`,
+          );
+        }
         if (err instanceof EngineApiUnreachableError) {
           return errorContent(
             `Engine API unreachable at ${err.url}. Map layer assembly requires engine-api.`,

@@ -34,6 +34,15 @@ import { buildSignedGateContext } from "./gate-context.js";
 const DEFAULT_ENGINE_API_URL = "http://localhost:8080";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+// Chain budget for the paid export calls (site-plan / terrain):
+// PE's Vercel BFF function caps at 60s (apps/property-explorer/vercel.json
+// maxDuration 60), so the MCP→engine hop must abort under ~50s to leave the
+// BFF headroom to return an honest error instead of a Vercel hard kill.
+// A warm site-plan refresh runs ~23s live; a cold one exceeds the old 30s
+// default, which is exactly the bug this budget fixes.
+const SITE_PLAN_REFRESH_TIMEOUT_MS = 50_000;
+const EXPORT_DOWNLOAD_TIMEOUT_MS = 45_000;
+
 /** Tenancy T1 gate-signed context headers. */
 const GATE_CONTEXT_HEADER = "X-Hauska-Gate-Context";
 const GATE_SIGNATURE_HEADER = "X-Hauska-Gate-Signature";
@@ -76,6 +85,25 @@ export class EngineApiUnreachableError extends Error {
     super(`Engine API unreachable at ${url}: ${String(cause)}`);
     this.name = "EngineApiUnreachableError";
     this.cause = cause;
+  }
+}
+
+/**
+ * The engine call was aborted by OUR client-side timeout — the service may
+ * be up (e.g. a cold-start or long render), so this must never be reported
+ * as "unreachable" or as a gate/auth problem. Subclasses
+ * EngineApiUnreachableError so existing instanceof fallbacks still catch it;
+ * consumers that care check this class first.
+ */
+export class EngineApiTimeoutError extends EngineApiUnreachableError {
+  constructor(
+    url: string,
+    public readonly timeoutMs: number,
+    cause: unknown,
+  ) {
+    super(url, cause);
+    this.name = "EngineApiTimeoutError";
+    this.message = `Engine API call timed out after ${timeoutMs}ms at ${url}`;
   }
 }
 
@@ -129,10 +157,12 @@ async function engineApiFetch<T>(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    init.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  );
+  const timeoutMs = init.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
 
   let res: Response;
   try {
@@ -143,6 +173,7 @@ async function engineApiFetch<T>(
       signal: controller.signal,
     });
   } catch (err) {
+    if (timedOut) throw new EngineApiTimeoutError(url, timeoutMs, err);
     throw new EngineApiUnreachableError(url, err);
   } finally {
     clearTimeout(timeout);
@@ -209,10 +240,12 @@ async function engineApiFetchBytes(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    init.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  );
+  const timeoutMs = init.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
 
   let res: Response;
   try {
@@ -222,6 +255,7 @@ async function engineApiFetchBytes(
       signal: controller.signal,
     });
   } catch (err) {
+    if (timedOut) throw new EngineApiTimeoutError(url, timeoutMs, err);
     throw new EngineApiUnreachableError(url, err);
   } finally {
     clearTimeout(timeout);
@@ -386,6 +420,7 @@ export const engineApiClient = {
     return engineApiFetchBytes(terrainExportDownloadPath(parcelNodeId, format), {
       gateHeaders,
       gateContext: gateContextFromGate(gate),
+      timeoutMs: EXPORT_DOWNLOAD_TIMEOUT_MS,
     });
   },
 
@@ -408,6 +443,8 @@ export const engineApiClient = {
         }),
         gateHeaders,
         gateContext: gateContextFromGate(gate),
+        // Warm refresh ~23s live; cold start exceeds the 30s default.
+        timeoutMs: SITE_PLAN_REFRESH_TIMEOUT_MS,
       },
     );
   },
@@ -421,6 +458,7 @@ export const engineApiClient = {
     return engineApiFetchBytes(sitePlanExportDownloadPath(parcelNodeId, format), {
       gateHeaders,
       gateContext: gateContextFromGate(gate),
+      timeoutMs: EXPORT_DOWNLOAD_TIMEOUT_MS,
     });
   },
 };
