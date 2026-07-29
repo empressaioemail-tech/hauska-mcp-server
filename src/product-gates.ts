@@ -83,6 +83,7 @@ const PUBLIC_CATALOG_TOOLS = new Set([
   "get_property_atom_chain",
   "refresh_parcel_terrain_export",
   "refresh_parcel_site_plan_export",
+  "refresh_parcel_dossier_export",
   "query_jurisdiction",
   "search_permit_atoms",
   "list_jurisdictions",
@@ -124,6 +125,15 @@ export function toolGateMetadata(name: string): ToolProductGate {
       gate: "access_policy",
       gate_summary:
         "Public catalog paid site-plan export (public-paid) — sibling of refresh_parcel_terrain_export, same gate shape. Requires X-Hauska-Key with paid entitlement; anonymous/free denied. One SDK meter per export request via authorizePaidCall.",
+      anonymous_ok: false,
+    };
+  }
+  if (name === "refresh_parcel_dossier_export") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Public catalog paid property-dossier PDF export (public-paid) — sibling of refresh_parcel_site_plan_export, same gate shape. Requires X-Hauska-Key with paid entitlement; anonymous/free denied. One SDK meter per export request via authorizePaidCall.",
       anonymous_ok: false,
     };
   }

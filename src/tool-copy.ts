@@ -70,6 +70,17 @@ export const TOOL_COPY = {
     "Not survey-grade — derived from public GIS records, honesty line carried on the PDF sheet. " +
     PUBLIC_TIER,
 
+  refresh_parcel_dossier_export:
+    "Refresh and return the paid property-dossier PDF export for county_fips:prop_id (e.g. 48029:105129). " +
+    "ONE hand-to-client document: Standard-styled cover with the caller-supplied verdict line (verbatim, labeled), cited brief facts with per-fact source and vintage, AI research summary page (labeled, with disclaimer), owner notes, and the parcel's site-plan sheets appended and renumbered. " +
+    "Single format: pdf-dossier. The engine renders exactly what the request carries and honest-degrades on anything absent — a missing site-plan capability never fails the export. " +
+    "Sibling of refresh_parcel_site_plan_export — SAME public-paid gate and SAME authorizePaidCall metering helper, distinct engine route (dossier-export/*). " +
+    "Requires X-Hauska-Key with paid entitlement; anonymous and free tiers are denied. " +
+    "One SDK metering event (authorizePaidCall) per export request. " +
+    "Optional format param (pdf-dossier) triggers artifact download (inline base64 when small; ref + downloadPath when large). " +
+    "Not survey-grade — derived from public GIS records plus caller-supplied content, honesty line carried in the PDF. " +
+    PUBLIC_TIER,
+
   query_jurisdiction:
     "Per-jurisdiction status snapshot: loaded edition, quality bar, atom count, drift. " +
     "Confirm availability before search_atoms. Parcel-level zoning by address is not v1 — use resolve_place with a product key. " +

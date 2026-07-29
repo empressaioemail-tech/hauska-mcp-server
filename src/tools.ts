@@ -26,6 +26,7 @@ import {
   propertyAtomChainEnvelope,
   parcelTerrainExportEnvelope,
   parcelSitePlanExportEnvelope,
+  parcelDossierExportEnvelope,
   getBriefRunEnvelope,
   getPlaceDossierEnvelope,
   getPlaceLayersEnvelope,
@@ -138,6 +139,13 @@ import {
   sitePlanExportDownloadPath,
   type SitePlanExportFormat,
 } from "./site-plan-export-contract.js";
+import {
+  isDossierExportArtifactDeferred,
+  DOSSIER_EXPORT_CONTENT_TYPE,
+  DOSSIER_EXPORT_FORMATS,
+  DOSSIER_EXPORT_MAX_INLINE_BYTES,
+  dossierExportDownloadPath,
+} from "./dossier-export-contract.js";
 
 const ATOM_DID_REGEX = /^did:hauska:[a-z-]+:[^\s]+$/;
 
@@ -1191,6 +1199,434 @@ export function registerTools(server: McpServer) {
           }
           return errorContent(
             `Engine API rejected site-plan export download (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`,
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 2d-2: refresh_parcel_dossier_export (engine #174 wiring).
+  // Sibling of refresh_parcel_site_plan_export above: SAME public-paid
+  // accessPolicy gate, SAME one-meter-per-export-request metering
+  // discipline via the shared SDK metering helper — a distinct engine
+  // route (dossier-export/*) and a single format (pdf-dossier). The
+  // dossier is ONE hand-to-client PDF: cover (caller-supplied verdict,
+  // verbatim + labeled), cited brief facts, AI chat summary (labeled with
+  // disclaimer), owner notes, and the parcel's site-plan sheets appended.
+  // The request body is forwarded to the engine VERBATIM; the engine
+  // renders exactly what it carries and honest-degrades on anything
+  // absent — a missing site-plan capability never fails the export.
+  // -----------------------------------------------------------------
+  server.tool(
+    "refresh_parcel_dossier_export",
+    TOOL_COPY.refresh_parcel_dossier_export,
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          PARCEL_NODE_ID_REGEX,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48029:105129)",
+        )
+        .describe("Permanent parcel node id county_fips:prop_id. Required."),
+      format: z
+        .enum(DOSSIER_EXPORT_FORMATS)
+        .optional()
+        .describe(
+          "Optional artifact format to download after refresh (pdf-dossier is the only dossier format).",
+        ),
+      address: z
+        .string()
+        .optional()
+        .describe(
+          "Optional caller-supplied street address for the cover and summary blocks. Never fabricated by the engine when omitted.",
+        ),
+      county_name: z
+        .string()
+        .optional()
+        .describe(
+          "Optional caller-supplied county name for the cover and summary blocks. Never fabricated by the engine when omitted.",
+        ),
+      verdict_line: z
+        .string()
+        .optional()
+        .describe(
+          "Optional caller-supplied verdict line rendered VERBATIM and labeled as caller-supplied on the dossier cover.",
+        ),
+      brief: z
+        .object({
+          sections: z.array(
+            z.object({
+              id: z.string(),
+              title: z.string(),
+              facts: z.array(
+                z.object({
+                  label: z.string(),
+                  value: z.string().optional(),
+                  source: z.string().optional(),
+                  vintage: z.string().optional(),
+                }),
+              ),
+            }),
+          ),
+        })
+        .optional()
+        .describe(
+          "Optional brief facts (sections of label/value facts with per-fact source and vintage) rendered in the summary-grid language. Absent values render as honest UNAVAILABLE chips.",
+        ),
+      chat_summary: z
+        .object({
+          summary: z.string(),
+          savedAt: z.string(),
+          disclaimer: z.string().optional(),
+        })
+        .optional()
+        .describe(
+          "Optional AI research summary (labeled page with user disclaimer in fine print).",
+        ),
+      notes: z
+        .string()
+        .optional()
+        .describe("Optional owner notes rendered on their own dossier page."),
+    },
+    async ({
+      parcel_node_id,
+      format,
+      address,
+      county_name,
+      verdict_line,
+      brief,
+      chat_summary,
+      notes,
+    }) => {
+      const tool = "refresh_parcel_dossier_export";
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      const paidTarget = {
+        accessPolicy: "public-paid" as const,
+        jurisdictionTenant: "property-spine",
+        sharedWithTenants: [] as string[],
+      };
+      if (!canReadAccessTarget(subject, paidTarget)) {
+        logAccessDenied({
+          tool,
+          policy: "public-paid",
+          atomJurisdiction: paidTarget.jurisdictionTenant,
+          subjectTenant: subject.jurisdictionTenant,
+          platformInternal: subject.platformInternal,
+          reason: "dossier_export_paid_catalog",
+        });
+        return errorContent(
+          `${tool} requires a paid X-Hauska-Key (public-paid). Anonymous and free tiers cannot refresh dossier exports.`,
+        );
+      }
+
+      const identity = requireIdentifiedCaller(tool);
+      if (!identity.ok) return identity.content;
+
+      const authCtx = getCurrentAuthContext();
+      if (isSdkMeteringEnabled()) {
+        const meter = await authorizePaidCall({
+          keyId: authCtx!.key_id!,
+          keyHash: authCtx?.key_hash,
+          mcpTier: tier,
+          tool,
+          requestId: getCurrentRequestId(),
+          product: getCurrentProduct(),
+        });
+        if (!meter.allowed) {
+          logger.warn("tool_metering_denied", {
+            tool,
+            deny_reason: meter.denyReason ?? null,
+          });
+          return errorContent(
+            meter.denyMessage ??
+              `Metering denied for tool "${tool}". Upgrade or retry after quota resets.`,
+          );
+        }
+      }
+
+      const gateProduct = gateFrontProductFor(getCurrentProduct()) ?? "cortex";
+      const gate = {
+        gateProduct,
+        accessTier: "public-paid" as const,
+        tenantId:
+          resolveGateTenantId(authCtx) ??
+          authCtx?.key_id ??
+          "public-catalog",
+        gateCredentialId: authCtx!.key_id!,
+        requestId: getCurrentRequestId(),
+      };
+
+      try {
+        const refresh = await engineApiClient.refreshParcelDossierExport(
+          parcel_node_id,
+          {
+            address,
+            countyName: county_name,
+            verdictLine: verdict_line,
+            brief,
+            chatSummary: chat_summary,
+            notes,
+          },
+          gate,
+        );
+
+        const data: import("./dossier-export-contract.js").ParcelDossierExportToolData =
+          {
+            parcelNodeId: parcel_node_id,
+            atom: refresh.atom,
+            artifacts: refresh.artifacts,
+            pageCount: refresh.pageCount,
+            dossierPageCount: refresh.dossierPageCount,
+            sitePlanAppended: refresh.sitePlanAppended,
+            sitePlanUnavailableReason: refresh.sitePlanUnavailableReason,
+            verdictIncluded: refresh.verdictIncluded,
+            briefSectionCount: refresh.briefSectionCount,
+            briefFactCount: refresh.briefFactCount,
+            chatSummaryIncluded: refresh.chatSummaryIncluded,
+            notesIncluded: refresh.notesIncluded,
+            setbackDegenerate: refresh.setbackDegenerate,
+            setbackHonestAbsence: refresh.setbackHonestAbsence,
+            streetHonestAbsence: refresh.streetHonestAbsence,
+            zoningHonestAbsence: refresh.zoningHonestAbsence,
+            floodZoneHonestUnavailable: refresh.floodZoneHonestUnavailable,
+          };
+
+        if (format && !isDossierExportArtifactDeferred(refresh.artifacts)) {
+          const artifactEntry = refresh.artifacts["pdf-dossier"];
+          const { bytes, contentType } =
+            await engineApiClient.downloadParcelDossierExport(
+              parcel_node_id,
+              gate,
+            );
+          const byteCount = bytes.byteLength;
+          const downloadPath = dossierExportDownloadPath(parcel_node_id);
+          if (byteCount <= DOSSIER_EXPORT_MAX_INLINE_BYTES) {
+            data.download = {
+              format: "pdf-dossier",
+              contentType: contentType || DOSSIER_EXPORT_CONTENT_TYPE,
+              base64: Buffer.from(bytes).toString("base64"),
+              byteCount,
+            };
+          } else {
+            data.download = {
+              format: "pdf-dossier",
+              contentType: contentType || DOSSIER_EXPORT_CONTENT_TYPE,
+              ref: artifactEntry?.ref ?? downloadPath,
+              byteCount,
+              downloadPath,
+            };
+          }
+        } else if (format && isDossierExportArtifactDeferred(refresh.artifacts)) {
+          const deferred = refresh.artifacts["pdf-dossier"];
+          data.download = undefined;
+          data.artifacts = {
+            ...data.artifacts,
+            "pdf-dossier": deferred ?? {
+              format: "pdf-dossier",
+              deferred: true,
+              deferredReason:
+                "pdf-dossier is deferred or unavailable for this parcel.",
+            },
+          };
+        }
+
+        const __readEnv = finalizeReadEnvelope(
+          tool,
+          parcelDossierExportEnvelope(data, {
+            tier,
+            readKind: "catalog",
+            note:
+              "Site geometry derived from public GIS records; verdict, brief facts, chat summary, and notes are caller-supplied and rendered verbatim with honest-absence chips. Not a boundary survey. Not for legal record. " +
+              "One SDK meter consumed per export request.",
+          }),
+          "public-paid",
+        );
+        logToolRead(
+          {
+            tool,
+            parcel_node_id,
+            tier,
+            format: format ?? null,
+            artifact_count: Object.keys(refresh.artifacts).length,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry the export in a moment.`,
+          );
+        }
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Dossier export requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          return errorContent(
+            `Engine API rejected dossier export (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`,
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 2e-2: download_parcel_dossier_export
+  //
+  // Streams the bytes for the already-refreshed pdf-dossier artifact back
+  // to the caller as base64. A multi-sheet dossier PDF routinely exceeds
+  // the 256 KiB inline cap, so the refresh tool returns a ref and the BFF
+  // fetches the bytes through this gate-signed hop (engine-api accepts
+  // ONLY gate-signed calls — same reason download_parcel_site_plan_export
+  // exists). No format param: the engine's dossier download route serves
+  // the single pdf-dossier artifact unconditionally.
+  //
+  // SAME public-paid gate as the refresh tool. NOT metered: the SDK meter
+  // is consumed once at refresh time; the download is the cheap second hop
+  // of that same paid request.
+  // -----------------------------------------------------------------
+  server.tool(
+    "download_parcel_dossier_export",
+    "Download the bytes for the already-refreshed property-dossier PDF " +
+      "(pdf-dossier). Gate-signed proxy to engine-api; returns the file as " +
+      "base64 with its content type. Call refresh_parcel_dossier_export " +
+      "first to build the artifact. " +
+      "public-paid; one SDK meter is consumed at refresh, not here.",
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          PARCEL_NODE_ID_REGEX,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48029:105129)",
+        )
+        .describe("Permanent parcel node id county_fips:prop_id. Required."),
+    },
+    async ({ parcel_node_id }) => {
+      const tool = "download_parcel_dossier_export";
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      const paidTarget = {
+        accessPolicy: "public-paid" as const,
+        jurisdictionTenant: "property-spine",
+        sharedWithTenants: [] as string[],
+      };
+      if (!canReadAccessTarget(subject, paidTarget)) {
+        logAccessDenied({
+          tool,
+          policy: "public-paid",
+          atomJurisdiction: paidTarget.jurisdictionTenant,
+          subjectTenant: subject.jurisdictionTenant,
+          platformInternal: subject.platformInternal,
+          reason: "dossier_export_download_paid_catalog",
+        });
+        return errorContent(
+          `${tool} requires a paid X-Hauska-Key (public-paid). Anonymous and free tiers cannot download dossier exports.`,
+        );
+      }
+
+      const identity = requireIdentifiedCaller(tool);
+      if (!identity.ok) return identity.content;
+
+      const authCtx = getCurrentAuthContext();
+      const gateProduct = gateFrontProductFor(getCurrentProduct()) ?? "cortex";
+      const gate = {
+        gateProduct,
+        accessTier: "public-paid" as const,
+        tenantId:
+          resolveGateTenantId(authCtx) ??
+          authCtx?.key_id ??
+          "public-catalog",
+        gateCredentialId: authCtx!.key_id!,
+        requestId: getCurrentRequestId(),
+      };
+
+      try {
+        const { bytes, contentType } =
+          await engineApiClient.downloadParcelDossierExport(
+            parcel_node_id,
+            gate,
+          );
+        const byteCount = bytes.byteLength;
+        const data = {
+          parcelNodeId: parcel_node_id,
+          download: {
+            format: "pdf-dossier" as const,
+            contentType: contentType || DOSSIER_EXPORT_CONTENT_TYPE,
+            base64: Buffer.from(bytes).toString("base64"),
+            byteCount,
+          },
+        };
+        const __readEnv = finalizeReadEnvelope(
+          tool,
+          buildEnvelope(
+            data,
+            [
+              {
+                did: `did:hauska:dossier-export:${parcel_node_id}:pdf-dossier`,
+                entityType: "parcel-site-plan-export-artifact",
+                entityId: parcel_node_id,
+                jurisdictionTenant: "property-spine",
+                contentHash: null,
+                cidNote:
+                  "Binary artifact returned as base64; site geometry derived from public GIS records, dossier content caller-supplied.",
+                source: {
+                  adapter: "engine-api",
+                  url: dossierExportDownloadPath(parcel_node_id),
+                  fetchedAt: new Date().toISOString(),
+                },
+              },
+            ],
+            { tier, readKind: "catalog" },
+          ),
+          "public-paid",
+        );
+        logToolRead(
+          {
+            tool,
+            parcel_node_id,
+            tier,
+            format: "pdf-dossier",
+            byte_length: byteCount,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry the download in a moment.`,
+          );
+        }
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Dossier export download requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          if (err.status === 404) {
+            return errorContent(
+              `Dossier artifact not found (404) for ${parcel_node_id}. ` +
+                "Call refresh_parcel_dossier_export first to build it.",
+            );
+          }
+          if (err.status === 410) {
+            return errorContent(
+              `Dossier artifact bytes evicted (410) for ${parcel_node_id}. ` +
+                "Call refresh_parcel_dossier_export again to rebuild it.",
+            );
+          }
+          return errorContent(
+            `Engine API rejected dossier export download (${err.status}): ${err.body.slice(0, 200)}`,
           );
         }
         return errorContent(

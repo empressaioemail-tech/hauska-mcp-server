@@ -33,9 +33,10 @@ test("listIntrospectionTools returns wire-accurate catalog", async () => {
   assert.ok(catalog.tools.some((t) => t.name === "get_property_atom_chain"));
   assert.ok(catalog.tools.some((t) => t.name === "refresh_parcel_terrain_export"));
   assert.ok(catalog.tools.some((t) => t.name === "refresh_parcel_site_plan_export"));
+  assert.ok(catalog.tools.some((t) => t.name === "refresh_parcel_dossier_export"));
   assert.equal(
     catalog.tools.filter((t) => t.gate === "access_policy").length,
-    9,
+    10,
   );
   assert.equal(
     catalog.by_product.public,
