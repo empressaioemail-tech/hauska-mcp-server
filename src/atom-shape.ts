@@ -38,6 +38,7 @@ import type {
 import type { PropertyAtomChainData } from "./property-atom-chain.js";
 import type { ParcelTerrainExportToolData } from "./terrain-export-contract.js";
 import type { ParcelSitePlanExportToolData } from "./site-plan-export-contract.js";
+import type { ParcelDossierExportToolData } from "./dossier-export-contract.js";
 import { extractCitedAtomDid } from "./source-obligation-meter.js";
 import type {
   GetPlaceDossierResponse,
@@ -306,6 +307,52 @@ export function parcelSitePlanExportEnvelope(
   // anchors into one atom (same parcel-terrain-model entity the terrain
   // export writes) — provenance entry stays on that atom, per-layer
   // citations live in the CAD/PDF provenance panel, not duplicated here.
+  const atoms: AtomProvenanceEntry[] = [
+    {
+      did,
+      entityType: "parcel-terrain-model",
+      entityId: data.parcelNodeId,
+      jurisdictionTenant,
+      contentHash:
+        typeof atom.contentHash === "string" ? atom.contentHash : null,
+      cidNote: CID_NOTE,
+      source: {
+        adapter:
+          typeof atom.sourceAdapter === "string"
+            ? atom.sourceAdapter
+            : "engine:site-plan-composer",
+        url:
+          typeof atom.sourceUrl === "string" ? atom.sourceUrl : null,
+        fetchedAt,
+      },
+    },
+  ];
+  return buildEnvelope(data, atoms, { ...options, readKind: "catalog" });
+}
+
+export function parcelDossierExportEnvelope(
+  data: ParcelDossierExportToolData,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<ParcelDossierExportToolData> {
+  const atom = data.atom;
+  const fetchedAt =
+    typeof atom.fetchedAt === "string"
+      ? atom.fetchedAt
+      : new Date().toISOString();
+  const rawDid =
+    typeof atom.atomDid === "string"
+      ? atom.atomDid
+      : `did:hauska:parcel-terrain-model:${data.parcelNodeId}`;
+  const did = rawDid.startsWith("did:") ? rawDid : `did:hauska:parcel-terrain-model:${rawDid}`;
+  const jurisdictionTenant =
+    typeof atom.jurisdictionTenant === "string"
+      ? atom.jurisdictionTenant
+      : "property-spine";
+  // The dossier records its pdf-dossier artifact on the SAME
+  // parcel-terrain-model atom the site-plan/terrain exports write —
+  // provenance entry stays on that atom. Caller-supplied dossier content
+  // (verdict, brief facts, chat summary, notes) is rendered verbatim by the
+  // engine and never becomes catalog provenance.
   const atoms: AtomProvenanceEntry[] = [
     {
       did,

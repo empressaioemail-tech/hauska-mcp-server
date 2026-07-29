@@ -29,6 +29,12 @@ import {
   type SitePlanExportRefreshRequest,
   type SitePlanExportRefreshResponse,
 } from "./site-plan-export-contract.js";
+import {
+  DOSSIER_EXPORT_PACKAGE_ID,
+  dossierExportDownloadPath,
+  type DossierExportRefreshRequest,
+  type DossierExportRefreshResponse,
+} from "./dossier-export-contract.js";
 import { buildSignedGateContext } from "./gate-context.js";
 
 const DEFAULT_ENGINE_API_URL = "http://localhost:8080";
@@ -320,6 +326,24 @@ function sitePlanExportGateHeaders(
   });
 }
 
+/**
+ * Property-dossier export (engine #174): same public-paid gate shape as
+ * site-plan-export, distinct packageId only so gate-front logging can tell
+ * the paid catalog exports apart.
+ */
+function dossierExportGateHeaders(
+  gate: MapLayersAssembleGateContext,
+): Record<string, string> {
+  return gateFrontHeadersFromContext({
+    product: gate.gateProduct,
+    packageId: DOSSIER_EXPORT_PACKAGE_ID,
+    accessTier: gate.accessTier,
+    tenantId: gate.tenantId,
+    gateCredentialId: gate.gateCredentialId,
+    requestId: gate.requestId,
+  });
+}
+
 export interface MapLayersAssembleGateContext {
   gateProduct: GateFrontProduct;
   accessTier: GateFrontAccessTier;
@@ -456,6 +480,46 @@ export const engineApiClient = {
   ): Promise<{ bytes: Uint8Array; contentType: string }> {
     const gateHeaders = sitePlanExportGateHeaders(gate);
     return engineApiFetchBytes(sitePlanExportDownloadPath(parcelNodeId, format), {
+      gateHeaders,
+      gateContext: gateContextFromGate(gate),
+      timeoutMs: EXPORT_DOWNLOAD_TIMEOUT_MS,
+    });
+  },
+
+  /**
+   * Property-dossier refresh (engine #174). The request body is forwarded
+   * VERBATIM — the engine owns validation (DOSSIER_CAPS zod) and rendering;
+   * it renders exactly what the request carries and honest-degrades on
+   * anything absent. Same timeout budget as the site-plan refresh: the
+   * dossier reuses the site-plan model-composition path server-side, so a
+   * cold refresh has the same wall-time envelope.
+   */
+  async refreshParcelDossierExport(
+    parcelNodeId: string,
+    request: DossierExportRefreshRequest,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<DossierExportRefreshResponse> {
+    const gateHeaders = dossierExportGateHeaders(gate);
+    const encoded = encodeURIComponent(parcelNodeId);
+    return engineApiFetch<DossierExportRefreshResponse>(
+      `/v1/property-nodes/${encoded}/dossier-export/refresh`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+        gateHeaders,
+        gateContext: gateContextFromGate(gate),
+        timeoutMs: SITE_PLAN_REFRESH_TIMEOUT_MS,
+      },
+    );
+  },
+
+  /** Property-dossier download — always the single pdf-dossier artifact. */
+  async downloadParcelDossierExport(
+    parcelNodeId: string,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const gateHeaders = dossierExportGateHeaders(gate);
+    return engineApiFetchBytes(dossierExportDownloadPath(parcelNodeId), {
       gateHeaders,
       gateContext: gateContextFromGate(gate),
       timeoutMs: EXPORT_DOWNLOAD_TIMEOUT_MS,
