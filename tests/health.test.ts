@@ -45,3 +45,30 @@ test("buildHealthReport reports degraded when a dependency is down", async () =>
     "connection refused",
   );
 });
+
+// Parked-Upstash honesty: the fluent-magpie instance was decommissioned
+// 2026-07-05; the env carries a REPLACE-with placeholder on purpose and
+// rate-limiting runs on the ResilientRateLimitStore memory fallback (PR #36).
+// probeUpstash must report that parked state as "skipped" (a known, honest,
+// non-alarming state), NOT try to reach the placeholder and report "down".
+import { probeUpstash } from "../src/health.js";
+
+test("probeUpstash reports parked (skipped) for a REPLACE-with placeholder URL, not down", async () => {
+  const prevUrl = process.env.UPSTASH_REDIS_REST_URL;
+  const prevTok = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const prevDev = process.env.HAUSKA_DEV_MODE;
+  process.env.UPSTASH_REDIS_REST_URL = "https://REPLACE-with-upstash-rest-url";
+  process.env.UPSTASH_REDIS_REST_TOKEN = "placeholder-token";
+  delete process.env.HAUSKA_DEV_MODE;
+  try {
+    const r = await probeUpstash();
+    assert.equal(r.state, "skipped");
+    assert.match(r.detail ?? "", /parked|memory fallback/i);
+  } finally {
+    if (prevUrl === undefined) delete process.env.UPSTASH_REDIS_REST_URL;
+    else process.env.UPSTASH_REDIS_REST_URL = prevUrl;
+    if (prevTok === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    else process.env.UPSTASH_REDIS_REST_TOKEN = prevTok;
+    if (prevDev !== undefined) process.env.HAUSKA_DEV_MODE = prevDev;
+  }
+});

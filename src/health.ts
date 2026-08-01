@@ -105,7 +105,7 @@ async function probePostgres(): Promise<DepHealth> {
   }
 }
 
-async function probeUpstash(): Promise<DepHealth> {
+export async function probeUpstash(): Promise<DepHealth> {
   if (process.env.HAUSKA_DEV_MODE === "true") {
     return { state: "skipped", latency_ms: null, detail: "dev mode" };
   }
@@ -113,6 +113,19 @@ async function probeUpstash(): Promise<DepHealth> {
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) {
     return { state: "skipped", latency_ms: null, detail: "not configured" };
+  }
+  // Upstash is intentionally parked (the fluent-magpie instance was
+  // decommissioned 2026-07-05); rate-limiting runs on the in-process
+  // ResilientRateLimitStore memory fallback (PR #36). A REPLACE-with
+  // placeholder URL is that parked state, not an outage — report it
+  // honestly so /health does not false-alarm "down" on a known-parked dep.
+  // Restoring distributed limits is an env/secret swap, no code change.
+  if (url.includes("REPLACE-with")) {
+    return {
+      state: "skipped",
+      latency_ms: null,
+      detail: "parked — rate-limit on memory fallback (ResilientRateLimitStore)",
+    };
   }
   return probeHttp(`${url}/ping`, { authorization: `Bearer ${token}` });
 }
