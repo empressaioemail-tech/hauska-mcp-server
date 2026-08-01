@@ -24,7 +24,7 @@ substitutions:
   _TAG: latest
   # Non-secret runtime config. Secrets are bound from Secret Manager in
   # the deploy step and never appear here.
-  _HAUSKA_BACKEND_URL: "https://REPLACE-with-cc-agent-E-engine-url"
+  _HAUSKA_BACKEND_URL: "https://hauska-retrieval-api-h7gvu7rgcq-uc.a.run.app"
   _LEGACY_BACKEND_URL: "https://cortex-api-tds7av26va-uc.a.run.app"
   _HAUSKA_ENGINE_API_URL: "https://hauska-engine-api-h7gvu7rgcq-uc.a.run.app"
   _UPSTASH_REDIS_REST_URL: "https://REPLACE-with-upstash-rest-url"
