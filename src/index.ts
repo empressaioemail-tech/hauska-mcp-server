@@ -14,8 +14,8 @@ import type { NextFunction, Request, Response } from "express";
 
 import { adminAuthMiddleware, buildAuthMiddleware, type AuthContext } from "./auth.js";
 import { buildAdminRouter } from "./admin.js";
-import { buildHealthReport } from "./health.js";
 import { emitGateProbeSignal, runGateProbe } from "./gate-probe.js";
+import { createHealthHandler, createReadinessHandler } from "./health-routes.js";
 import { buildHealthzReportAndEmit } from "./healthz.js";
 import { createLogSink, type LogSinkHandle } from "./log-sink.js";
 import { addLogSink, logger } from "./logger.js";
@@ -88,20 +88,13 @@ async function main() {
   // alive; the body's `status` field reflects the dependency rollup, so
   // the Cloud Run liveness probe stays green even when a downstream
   // dependency is down.
-  app.get("/health", async (_req, res) => {
-    try {
-      res.json(await buildHealthReport());
-    } catch (err) {
-      logger.error("health_report_error", { error: String(err) });
-      res.json({
-        status: "degraded",
-        service: "hauska-mcp-server",
-        version: "0.1.0",
-        env: ENV,
-        error: "health report failed",
-      });
-    }
-  });
+  app.get("/health", createHealthHandler());
+
+  // Readiness check. Public, no auth. This is separate from /health because
+  // Cloud Run uses /health for liveness. Only a DOWN engine/retrieval API or
+  // Postgres dependency returns 503; skipped, degraded, and non-critical
+  // dependencies leave readiness green.
+  app.get("/health/ready", createReadinessHandler());
 
   // Normalized health surface for the platform observability sprint (76e).
   // Public, no auth. Emits one hauska_health structured log line per check.
@@ -363,6 +356,7 @@ async function main() {
       env: ENV,
       endpoint: "/mcp",
       health: "/health",
+      readiness: "/health/ready",
       healthz: "/healthz",
       gate_probe: "/gate-probe",
       admin: "/admin/keys",
