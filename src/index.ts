@@ -218,14 +218,23 @@ async function main() {
     try {
       primaryStore = buildUpstashStore();
     } catch (err) {
-      logger.warn("rate_limit_store_env_missing", {
+      const logData = {
         error: String(err),
         fallback: "MemoryRateLimitStore",
         note:
           ENV === "production"
-            ? "PRODUCTION WARNING: Rate limits are per-instance only. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for distributed rate limiting."
+            ? "PRODUCTION FAIL-LOUD: Upstash misconfigured/placeholder. Rate limits are per-instance only, NOT shared across Cloud Run instances. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN to real values."
             : "Using in-memory rate limiter. Limits are per-instance only.",
-      });
+      };
+      // Production degrading to a per-instance limiter is a real incident
+      // (the whole point of Cloud Run autoscaling is multiple instances,
+      // each of which would enforce its own separate budget) — log it at
+      // error, not warn, so it surfaces in alerting instead of getting lost.
+      if (ENV === "production") {
+        logger.error("rate_limit_store_env_missing", logData);
+      } else {
+        logger.warn("rate_limit_store_env_missing", logData);
+      }
       primaryStore = new MemoryRateLimitStore();
     }
     rateLimitStore = new ResilientRateLimitStore(primaryStore, logger);

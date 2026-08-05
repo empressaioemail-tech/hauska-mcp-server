@@ -46,29 +46,89 @@ test("buildHealthReport reports degraded when a dependency is down", async () =>
   );
 });
 
-// Parked-Upstash honesty: the fluent-magpie instance was decommissioned
-// 2026-07-05; the env carries a REPLACE-with placeholder on purpose and
-// rate-limiting runs on the ResilientRateLimitStore memory fallback (PR #36).
-// probeUpstash must report that parked state as "skipped" (a known, honest,
-// non-alarming state), NOT try to reach the placeholder and report "down".
+// Fail-loud degraded mode (76j Workstream C1): a REPLACE-with placeholder
+// URL, or Upstash env entirely missing, means the process is silently
+// running on the ResilientRateLimitStore per-instance memory fallback —
+// NOT a benign parked/skipped state. probeUpstash must report "degraded"
+// (surfacing in /health status + alerting), never try to reach the
+// placeholder host, and never silently report "skipped".
 import { probeUpstash } from "../src/health.js";
 
-test("probeUpstash reports parked (skipped) for a REPLACE-with placeholder URL, not down", async () => {
-  const prevUrl = process.env.UPSTASH_REDIS_REST_URL;
-  const prevTok = process.env.UPSTASH_REDIS_REST_TOKEN;
-  const prevDev = process.env.HAUSKA_DEV_MODE;
-  process.env.UPSTASH_REDIS_REST_URL = "https://REPLACE-with-upstash-rest-url";
-  process.env.UPSTASH_REDIS_REST_TOKEN = "placeholder-token";
-  delete process.env.HAUSKA_DEV_MODE;
-  try {
-    const r = await probeUpstash();
-    assert.equal(r.state, "skipped");
-    assert.match(r.detail ?? "", /parked|memory fallback/i);
-  } finally {
-    if (prevUrl === undefined) delete process.env.UPSTASH_REDIS_REST_URL;
-    else process.env.UPSTASH_REDIS_REST_URL = prevUrl;
-    if (prevTok === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN;
-    else process.env.UPSTASH_REDIS_REST_TOKEN = prevTok;
-    if (prevDev !== undefined) process.env.HAUSKA_DEV_MODE = prevDev;
+function withEnv(
+  vars: Record<string, string | undefined>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const prev: Record<string, string | undefined> = {};
+  for (const key of Object.keys(vars)) {
+    prev[key] = process.env[key];
+    if (vars[key] === undefined) delete process.env[key];
+    else process.env[key] = vars[key];
   }
+  return fn().finally(() => {
+    for (const key of Object.keys(prev)) {
+      if (prev[key] === undefined) delete process.env[key];
+      else process.env[key] = prev[key];
+    }
+  });
+}
+
+test("probeUpstash reports degraded (not skipped) for a REPLACE-with placeholder URL", async () => {
+  await withEnv(
+    {
+      UPSTASH_REDIS_REST_URL: "https://REPLACE-with-upstash-rest-url",
+      UPSTASH_REDIS_REST_TOKEN: "placeholder-token",
+      HAUSKA_DEV_MODE: undefined,
+    },
+    async () => {
+      const r = await probeUpstash();
+      assert.equal(r.state, "degraded");
+      assert.match(r.detail ?? "", /degraded/i);
+      assert.match(r.detail ?? "", /REPLACE-with|memory fallback/i);
+    },
+  );
+});
+
+test("probeUpstash reports degraded (not skipped) when env is entirely unset", async () => {
+  await withEnv(
+    {
+      UPSTASH_REDIS_REST_URL: undefined,
+      UPSTASH_REDIS_REST_TOKEN: undefined,
+      HAUSKA_DEV_MODE: undefined,
+    },
+    async () => {
+      const r = await probeUpstash();
+      assert.equal(r.state, "degraded");
+      assert.match(r.detail ?? "", /not set/i);
+    },
+  );
+});
+
+test("probeUpstash still reports skipped in dev mode regardless of Upstash config", async () => {
+  await withEnv(
+    {
+      UPSTASH_REDIS_REST_URL: undefined,
+      UPSTASH_REDIS_REST_TOKEN: undefined,
+      HAUSKA_DEV_MODE: "true",
+    },
+    async () => {
+      const r = await probeUpstash();
+      assert.equal(r.state, "skipped");
+      assert.match(r.detail ?? "", /dev mode/i);
+    },
+  );
+});
+
+test("buildHealthReport rolls a degraded upstash dependency up into overall degraded status", async () => {
+  const report = await buildHealthReport({
+    engine: okProbe,
+    cortexApi: okProbe,
+    postgres: okProbe,
+    upstash: async () => ({
+      state: "degraded",
+      latency_ms: null,
+      detail: "degraded — REPLACE-with placeholder URL, rate-limit on per-instance memory fallback",
+    }),
+  });
+  assert.equal(report.status, "degraded");
+  assert.equal(report.dependencies.upstash.state, "degraded");
 });
