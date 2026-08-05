@@ -9,7 +9,9 @@ import { test } from "node:test";
 
 import {
   ResilientRateLimitStore,
+  buildUpstashStore,
   checkRateLimit,
+  isPlaceholderUpstashUrl,
   type RateLimitStore,
 } from "../src/rate-limit.js";
 
@@ -132,6 +134,48 @@ test("genuine over-limit still returns 429 shape after recovery", async () => {
   assert.equal(d2.allowed, false);
   assert.equal(d2.reason, "rpm");
   assert.equal(d2.remaining_rpm, 0);
+});
+
+// Placeholder-URL detection (76j Workstream C1 fail-loud degraded mode):
+// cloudbuild-mcp.yaml historically shipped a literal
+// "https://REPLACE-with-upstash-rest-url" default. buildUpstashStore must
+// treat that shape identically to a genuinely missing URL — never attempt
+// a network call against a host that cannot exist.
+test("isPlaceholderUpstashUrl detects REPLACE-with placeholders and missing values", () => {
+  assert.equal(isPlaceholderUpstashUrl("https://REPLACE-with-upstash-rest-url"), true);
+  assert.equal(isPlaceholderUpstashUrl(undefined), true);
+  assert.equal(isPlaceholderUpstashUrl(""), true);
+  assert.equal(isPlaceholderUpstashUrl("https://known-region.upstash.io"), false);
+});
+
+test("buildUpstashStore throws on a REPLACE-with placeholder URL even when a token is present", () => {
+  const prevUrl = process.env.UPSTASH_REDIS_REST_URL;
+  const prevTok = process.env.UPSTASH_REDIS_REST_TOKEN;
+  process.env.UPSTASH_REDIS_REST_URL = "https://REPLACE-with-upstash-rest-url";
+  process.env.UPSTASH_REDIS_REST_TOKEN = "some-token";
+  try {
+    assert.throws(() => buildUpstashStore(), /must both be set/);
+  } finally {
+    if (prevUrl === undefined) delete process.env.UPSTASH_REDIS_REST_URL;
+    else process.env.UPSTASH_REDIS_REST_URL = prevUrl;
+    if (prevTok === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    else process.env.UPSTASH_REDIS_REST_TOKEN = prevTok;
+  }
+});
+
+test("buildUpstashStore throws when the URL is a real host but the token is missing", () => {
+  const prevUrl = process.env.UPSTASH_REDIS_REST_URL;
+  const prevTok = process.env.UPSTASH_REDIS_REST_TOKEN;
+  process.env.UPSTASH_REDIS_REST_URL = "https://known-region.upstash.io";
+  delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  try {
+    assert.throws(() => buildUpstashStore(), /must both be set/);
+  } finally {
+    if (prevUrl === undefined) delete process.env.UPSTASH_REDIS_REST_URL;
+    else process.env.UPSTASH_REDIS_REST_URL = prevUrl;
+    if (prevTok === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    else process.env.UPSTASH_REDIS_REST_TOKEN = prevTok;
+  }
 });
 
 test("circuit re-closes on subsequent failure after recovery attempt", async () => {

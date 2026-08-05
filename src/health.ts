@@ -11,6 +11,7 @@
 
 import { getPool } from "./db.js";
 import { metrics, type MetricsSnapshot } from "./metrics.js";
+import { isPlaceholderUpstashUrl } from "./rate-limit.js";
 
 const PROBE_TIMEOUT_MS = 2_000;
 const DEP_CACHE_TTL_MS = 15_000;
@@ -111,20 +112,22 @@ export async function probeUpstash(): Promise<DepHealth> {
   }
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) {
-    return { state: "skipped", latency_ms: null, detail: "not configured" };
-  }
-  // Upstash is intentionally parked (the fluent-magpie instance was
-  // decommissioned 2026-07-05); rate-limiting runs on the in-process
-  // ResilientRateLimitStore memory fallback (PR #36). A REPLACE-with
-  // placeholder URL is that parked state, not an outage — report it
-  // honestly so /health does not false-alarm "down" on a known-parked dep.
-  // Restoring distributed limits is an env/secret swap, no code change.
-  if (url.includes("REPLACE-with")) {
+  // Missing config or a REPLACE-with placeholder both mean the process is
+  // running on the ResilientRateLimitStore in-memory fallback (per-instance
+  // limits, not shared across Cloud Run instances). This is a DEGRADED
+  // production posture, not a benign "not configured" skip — report it
+  // loudly so /health and alerting see it, instead of the prior silent
+  // "skipped" state that let this parked condition go unnoticed for months.
+  if (!token || isPlaceholderUpstashUrl(url)) {
+    const reason = !url
+      ? "UPSTASH_REDIS_REST_URL not set"
+      : isPlaceholderUpstashUrl(url)
+        ? "REPLACE-with placeholder URL"
+        : "UPSTASH_REDIS_REST_TOKEN not set";
     return {
-      state: "skipped",
+      state: "degraded",
       latency_ms: null,
-      detail: "parked — rate-limit on memory fallback (ResilientRateLimitStore)",
+      detail: `degraded — ${reason}, rate-limit on per-instance memory fallback`,
     };
   }
   return probeHttp(`${url}/ping`, { authorization: `Bearer ${token}` });

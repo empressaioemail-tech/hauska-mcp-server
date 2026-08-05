@@ -53,12 +53,21 @@ export class UpstashRateLimitStore implements RateLimitStore {
   }
 }
 
+// A URL containing "REPLACE-with" is a known placeholder shape (the
+// literal cloudbuild-mcp.yaml default before a real Upstash database is
+// wired). Treat it identically to a missing URL: fail loud, do not
+// attempt to reach it.
+export function isPlaceholderUpstashUrl(url: string | undefined): boolean {
+  return !url || url.includes("REPLACE-with");
+}
+
 export function buildUpstashStore(): UpstashRateLimitStore {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) {
+  if (isPlaceholderUpstashUrl(url) || !token) {
     throw new Error(
-      "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must both be set.",
+      "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must both be set " +
+        "to real values (a REPLACE-with placeholder URL counts as unset).",
     );
   }
   return new UpstashRateLimitStore(new Redis({ url, token }));
