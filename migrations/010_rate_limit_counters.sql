@@ -1,4 +1,4 @@
-﻿-- Distributed rate-limit counters (T4 postgres store).
+-- Distributed rate-limit counters (T4 postgres store).
 -- Atomic upserts via counter_key; expires_at drives window reset.
 
 CREATE TABLE IF NOT EXISTS rate_limit_counters (
