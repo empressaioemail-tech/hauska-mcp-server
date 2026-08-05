@@ -23,9 +23,11 @@ import { getMeteringSummary } from "./metering-summary.js";
 import { metrics } from "./metrics.js";
 import { isProduct, type Product } from "./products.js";
 import {
-  buildUpstashStore,
+  buildPrimaryRateLimitStore,
   MemoryRateLimitStore,
   ResilientRateLimitStore,
+  resolveRateLimitStoreKind,
+  setRateLimitRuntimeState,
   type RateLimitStore,
 } from "./rate-limit.js";
 import { requestContext } from "./request-context.js";
@@ -216,14 +218,16 @@ async function main() {
   } else {
     let primaryStore: RateLimitStore;
     try {
-      primaryStore = buildUpstashStore();
+      const kind = resolveRateLimitStoreKind();
+      primaryStore = buildPrimaryRateLimitStore();
+      setRateLimitRuntimeState({ primaryKind: kind, memoryFallback: false });
     } catch (err) {
       const logData = {
         error: String(err),
         fallback: "MemoryRateLimitStore",
         note:
           ENV === "production"
-            ? "PRODUCTION FAIL-LOUD: Upstash misconfigured/placeholder. Rate limits are per-instance only, NOT shared across Cloud Run instances. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN to real values."
+            ? "PRODUCTION FAIL-LOUD: Postgres rate-limit store unavailable. Rate limits are per-instance only, NOT shared across Cloud Run instances. Set DATABASE_URL and run migration 010_rate_limit_counters."
             : "Using in-memory rate limiter. Limits are per-instance only.",
       };
       // Production degrading to a per-instance limiter is a real incident
@@ -236,6 +240,7 @@ async function main() {
         logger.warn("rate_limit_store_env_missing", logData);
       }
       primaryStore = new MemoryRateLimitStore();
+      setRateLimitRuntimeState({ primaryKind: "memory", memoryFallback: true });
     }
     rateLimitStore = new ResilientRateLimitStore(primaryStore, logger);
     authMiddleware = buildAuthMiddleware(rateLimitStore);

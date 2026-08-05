@@ -1,6 +1,6 @@
 // Rate-limit store resilience tests.
 //
-// Verifies that when the primary rate-limit store (Upstash) fails, the
+// Verifies that when the primary rate-limit store fails, the
 // system degrades gracefully to an in-memory fallback and recovers
 // automatically via circuit-breaker retry logic.
 
@@ -9,6 +9,7 @@ import { test } from "node:test";
 
 import {
   ResilientRateLimitStore,
+  buildPrimaryRateLimitStore,
   buildUpstashStore,
   checkRateLimit,
   isPlaceholderUpstashUrl,
@@ -201,3 +202,23 @@ test("circuit re-closes on subsequent failure after recovery attempt", async () 
   await checkRateLimit(resilient, "key:d", limits, state.now);
   assert.equal(events.length, 2, "should not spam logs");
 });
+
+test("buildPrimaryRateLimitStore throws without DATABASE_URL for postgres default", () => {
+  const prevUrl = process.env.DATABASE_URL;
+  const prevStore = process.env.HAUSKA_RATE_LIMIT_STORE;
+  const prevEnv = process.env.HAUSKA_ENV;
+  delete process.env.DATABASE_URL;
+  process.env.HAUSKA_RATE_LIMIT_STORE = "postgres";
+  process.env.HAUSKA_ENV = "production";
+  try {
+    assert.throws(() => buildPrimaryRateLimitStore(), /DATABASE_URL must be set/);
+  } finally {
+    if (prevUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = prevUrl;
+    if (prevStore === undefined) delete process.env.HAUSKA_RATE_LIMIT_STORE;
+    else process.env.HAUSKA_RATE_LIMIT_STORE = prevStore;
+    if (prevEnv === undefined) delete process.env.HAUSKA_ENV;
+    else process.env.HAUSKA_ENV = prevEnv;
+  }
+});
+
