@@ -1,4 +1,4 @@
-import { strict as assert } from "node:assert";
+﻿import { strict as assert } from "node:assert";
 import type { AddressInfo } from "node:net";
 import { once } from "node:events";
 import { test } from "node:test";
@@ -55,7 +55,7 @@ test("GET /health/ready returns 503 when engine/retrieval is down", async () => 
     engine: downProbe,
     cortexApi: okProbe,
     postgres: okProbe,
-    upstash: okProbe,
+    rateLimitStore: okProbe,
   });
   const response = await getRoute(
     "/health/ready",
@@ -73,7 +73,7 @@ test("GET /health/ready returns 503 when Postgres is down", async () => {
     engine: okProbe,
     cortexApi: okProbe,
     postgres: downProbe,
-    upstash: okProbe,
+    rateLimitStore: okProbe,
   });
   const response = await getRoute(
     "/health/ready",
@@ -84,12 +84,12 @@ test("GET /health/ready returns 503 when Postgres is down", async () => {
   assert.equal(response.status, 503);
 });
 
-test("GET /health/ready returns 200 when only Upstash is skipped", async () => {
+test("GET /health/ready returns 200 when only rate_limit_store is skipped", async () => {
   const report = await buildReadinessReport({
     engine: okProbe,
     cortexApi: okProbe,
     postgres: okProbe,
-    upstash: skippedProbe,
+    rateLimitStore: skippedProbe,
   });
   const response = await getRoute(
     "/health/ready",
@@ -106,7 +106,7 @@ test("GET /health/ready stays 200 for degraded or non-critical dependencies", as
     engine: degradedProbe,
     cortexApi: downProbe,
     postgres: okProbe,
-    upstash: skippedProbe,
+    rateLimitStore: skippedProbe,
   });
   const response = await getRoute(
     "/health/ready",
@@ -143,7 +143,7 @@ test("GET /health remains HTTP 200 when its body is degraded", async () => {
       engine_retrieval_api: await downProbe(),
       cortex_api: await okProbe(),
       postgres: await okProbe(),
-      upstash: await skippedProbe(),
+      rateLimitStore: await skippedProbe(),
     },
   };
   const response = await getRoute(
@@ -154,3 +154,5 @@ test("GET /health remains HTTP 200 when its body is degraded", async () => {
   assert.equal(response.status, 200);
   assert.deepEqual(response.body, degradedReport);
 });
+
+

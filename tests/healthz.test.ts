@@ -1,4 +1,4 @@
-// /healthz normalized payload tests.
+﻿// /healthz normalized payload tests.
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
@@ -21,7 +21,7 @@ test("buildHealthzReport returns status deps revision shape", async () => {
       engine: okProbe,
       cortexApi: okProbe,
       postgres: okProbe,
-      upstash: okProbe,
+      rateLimitStore: okProbe,
     });
     assert.equal(report.status, "ok");
     assert.equal(report.deps.retrieval_api, "ok");
@@ -38,7 +38,7 @@ test("buildHealthzReport rolls up degraded when retrieval-api is down", async ()
     engine: downProbe,
     cortexApi: okProbe,
     postgres: okProbe,
-    upstash: okProbe,
+    rateLimitStore: okProbe,
   });
   assert.equal(report.status, "degraded");
   assert.equal(report.deps.retrieval_api, "down");
@@ -53,3 +53,4 @@ test("revisionFromEnv falls back to local", () => {
     if (prev !== undefined) process.env.K_REVISION = prev;
   }
 });
+

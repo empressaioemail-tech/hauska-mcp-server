@@ -9,12 +9,12 @@
 // the limiter short-circuits to allow.
 //
 // The store is injectable so tests can run against an in-memory backend
-// without needing Upstash credentials. Production uses Upstash REST,
-// which is the right pairing for Cloud Run (no persistent connection,
-// no cold-start cost on the client side).
+// without needing external credentials. Production prefers Postgres
+// counters on the shared DATABASE_URL pool (distributed by construction).
 
 import { Redis } from "@upstash/redis";
 
+import { getPool } from "./db.js";
 import type { RateLimits } from "./tiers.js";
 
 export interface RateLimitDecision {
@@ -74,9 +74,91 @@ export function buildUpstashStore(): UpstashRateLimitStore {
 }
 
 // -----------------------------------------------------------------
+// Postgres-backed production store (T4 recommended path).
+// -----------------------------------------------------------------
+
+const INCR_WITH_TTL_SQL = `
+INSERT INTO rate_limit_counters (counter_key, count, expires_at)
+VALUES ($1, 1, NOW() + ($2::double precision * INTERVAL '1 second'))
+ON CONFLICT (counter_key) DO UPDATE SET
+  count = CASE
+    WHEN rate_limit_counters.expires_at <= NOW() THEN 1
+    ELSE rate_limit_counters.count + 1
+  END,
+  expires_at = CASE
+    WHEN rate_limit_counters.expires_at <= NOW()
+      THEN NOW() + ($2::double precision * INTERVAL '1 second')
+    ELSE rate_limit_counters.expires_at
+  END
+RETURNING count;
+`;
+
+export class PostgresRateLimitStore implements RateLimitStore {
+  constructor(private readonly pool: import("pg").Pool | null = null) {}
+
+  async incrWithTtl(key: string, ttlSeconds: number): Promise<number> {
+    const db = this.pool ?? getPool();
+    const result = await db.query<{ count: string }>(INCR_WITH_TTL_SQL, [
+      key,
+      ttlSeconds,
+    ]);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error("PostgresRateLimitStore: upsert returned no row");
+    }
+    return Number(row.count);
+  }
+}
+
+export type RateLimitPrimaryKind = "postgres" | "upstash" | "memory";
+
+export interface RateLimitRuntimeState {
+  primaryKind: RateLimitPrimaryKind;
+  memoryFallback: boolean;
+}
+
+let runtimeState: RateLimitRuntimeState = {
+  primaryKind: "memory",
+  memoryFallback: true,
+};
+
+export function getRateLimitRuntimeState(): RateLimitRuntimeState {
+  return runtimeState;
+}
+
+export function setRateLimitRuntimeState(state: RateLimitRuntimeState): void {
+  runtimeState = state;
+}
+
+export function resolveRateLimitStoreKind(): Exclude<RateLimitPrimaryKind, "memory"> {
+  const explicit = (process.env.HAUSKA_RATE_LIMIT_STORE ?? "").trim().toLowerCase();
+  if (explicit === "upstash") return "upstash";
+  if (explicit === "postgres") return "postgres";
+  const env = process.env.HAUSKA_ENV ?? "development";
+  if (env === "production") return "postgres";
+  if (process.env.DATABASE_URL) return "postgres";
+  throw new Error(
+    "No distributed rate-limit store configured: set DATABASE_URL for postgres or HAUSKA_RATE_LIMIT_STORE=upstash",
+  );
+}
+
+export function buildPrimaryRateLimitStore(): RateLimitStore {
+  const kind = resolveRateLimitStoreKind();
+  if (kind === "upstash") {
+    return buildUpstashStore();
+  }
+  if (!process.env.DATABASE_URL) {
+    throw new Error(
+      "DATABASE_URL must be set when HAUSKA_RATE_LIMIT_STORE=postgres (default in production).",
+    );
+  }
+  return new PostgresRateLimitStore();
+}
+
+// -----------------------------------------------------------------
 // Resilient store wrapper with circuit-breaker fallback.
 //
-// Wraps a primary store (typically Upstash) and automatically falls
+// Wraps a primary store (typically Postgres) and automatically falls
 // back to a MemoryRateLimitStore when the primary fails. Retries the
 // primary no more than once every 60s. Never throws; always returns
 // a decision (fail-degraded, not fail-closed).
@@ -108,6 +190,10 @@ export class ResilientRateLimitStore implements RateLimitStore {
         try {
           const result = await this.primary.incrWithTtl(key, ttlSeconds);
           this.fallbackStore = null;
+          setRateLimitRuntimeState({
+            ...getRateLimitRuntimeState(),
+            memoryFallback: false,
+          });
           this.logger.error("rate_limit_store_recovered", {});
           return result;
         } catch (err) {
@@ -127,6 +213,10 @@ export class ResilientRateLimitStore implements RateLimitStore {
       this.lastFailureTimeMs = nowMs;
       this.fallbackStore = new MemoryRateLimitStore();
       this.fallbackStore.setClock(this.now);
+      setRateLimitRuntimeState({
+        ...getRateLimitRuntimeState(),
+        memoryFallback: true,
+      });
       this.logger.error("rate_limit_store_degraded", {
         error: String(err),
       });

@@ -63,6 +63,15 @@ declare global {
   }
 }
 
+
+export function resolveClientIp(req: Request): string {
+  const raw = req.ip ?? "unknown";
+  if (raw.startsWith("::ffff:")) {
+    return raw.slice("::ffff:".length);
+  }
+  return raw;
+}
+
 const HEADER_KEY = "x-hauska-key";
 const HEADER_ADMIN = "x-hauska-admin-key";
 
@@ -185,7 +194,7 @@ export function buildAuthMiddleware(store: RateLimitStore) {
     }
 
     // Free-tier anonymous path.
-    const ip = req.ip ?? "unknown";
+    const ip = resolveClientIp(req);
     const limits = freeIpLimits();
     const identifier = `ip:${ip}`;
     let decision: RateLimitDecision;

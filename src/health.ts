@@ -11,7 +11,10 @@
 
 import { getPool } from "./db.js";
 import { metrics, type MetricsSnapshot } from "./metrics.js";
-import { isPlaceholderUpstashUrl } from "./rate-limit.js";
+import {
+  getRateLimitRuntimeState,
+  resolveRateLimitStoreKind,
+} from "./rate-limit.js";
 
 const PROBE_TIMEOUT_MS = 2_000;
 const DEP_CACHE_TTL_MS = 15_000;
@@ -41,7 +44,7 @@ export interface ProbeFns {
   engine: () => Promise<DepHealth>;
   cortexApi: () => Promise<DepHealth>;
   postgres: () => Promise<DepHealth>;
-  upstash: () => Promise<DepHealth>;
+  rateLimitStore: () => Promise<DepHealth>;
 }
 
 function engineUrl(): string {
@@ -106,38 +109,56 @@ async function probePostgres(): Promise<DepHealth> {
   }
 }
 
-export async function probeUpstash(): Promise<DepHealth> {
+export async function probeRateLimitStore(): Promise<DepHealth> {
   if (process.env.HAUSKA_DEV_MODE === "true") {
     return { state: "skipped", latency_ms: null, detail: "dev mode" };
   }
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  // Missing config or a REPLACE-with placeholder both mean the process is
-  // running on the ResilientRateLimitStore in-memory fallback (per-instance
-  // limits, not shared across Cloud Run instances). This is a DEGRADED
-  // production posture, not a benign "not configured" skip — report it
-  // loudly so /health and alerting see it, instead of the prior silent
-  // "skipped" state that let this parked condition go unnoticed for months.
-  if (!token || isPlaceholderUpstashUrl(url)) {
-    const reason = !url
-      ? "UPSTASH_REDIS_REST_URL not set"
-      : isPlaceholderUpstashUrl(url)
-        ? "REPLACE-with placeholder URL"
-        : "UPSTASH_REDIS_REST_TOKEN not set";
+
+  const runtime = getRateLimitRuntimeState();
+  if (runtime.memoryFallback || runtime.primaryKind === "memory") {
     return {
       state: "degraded",
       latency_ms: null,
-      detail: `degraded — ${reason}, rate-limit on per-instance memory fallback`,
+      detail:
+        "degraded — rate-limit on per-instance memory fallback (not shared across instances)",
+    };
+  }
+
+  if (runtime.primaryKind === "postgres") {
+    const started = Date.now();
+    try {
+      await getPool().query("SELECT 1 FROM rate_limit_counters LIMIT 0");
+      return { state: "ok", latency_ms: Date.now() - started, detail: "postgres" };
+    } catch (err) {
+      return {
+        state: "degraded",
+        latency_ms: Date.now() - started,
+        detail: `postgres rate_limit_counters probe failed: ${String(err).slice(0, 120)}`,
+      };
+    }
+  }
+
+  // Legacy upstash adapter (secondary / unused in T4 posture).
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!token || !url || url.includes("REPLACE-with")) {
+    return {
+      state: "degraded",
+      latency_ms: null,
+      detail: "degraded — upstash adapter selected but not configured",
     };
   }
   return probeHttp(`${url}/ping`, { authorization: `Bearer ${token}` });
 }
 
+/** @deprecated Use probeRateLimitStore. Kept for transitional imports in tests. */
+export const probeUpstash = probeRateLimitStore;
+
 const defaultProbes: ProbeFns = {
   engine: () => probeHttp(`${engineUrl()}/healthz`),
   cortexApi: () => probeHttp(`${cortexApiUrl()}/api/healthz`),
   postgres: probePostgres,
-  upstash: probeUpstash,
+  rateLimitStore: probeRateLimitStore,
 };
 
 let depCache: { at: number; deps: Record<string, DepHealth> } | null = null;
@@ -151,17 +172,17 @@ async function resolveDeps(
     return depCache.deps;
   }
   const p: ProbeFns = { ...defaultProbes, ...probes };
-  const [engine, cortexApi, postgres, upstash] = await Promise.all([
+  const [engine, cortexApi, postgres, rateLimitStore] = await Promise.all([
     p.engine(),
     p.cortexApi(),
     p.postgres(),
-    p.upstash(),
+    p.rateLimitStore(),
   ]);
   const deps: Record<string, DepHealth> = {
     engine_retrieval_api: engine,
     cortex_api: cortexApi,
     postgres,
-    upstash,
+    rate_limit_store: rateLimitStore,
   };
   if (useCache) depCache = { at: now, deps };
   return deps;

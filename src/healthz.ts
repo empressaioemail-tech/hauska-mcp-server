@@ -1,7 +1,7 @@
-// Normalized /healthz payload for the platform observability sprint (76e).
+﻿// Normalized /healthz payload for the platform observability sprint (76e).
 //
 // Shape: { status, deps, revision } where deps covers retrieval-api and
-// legacy-backend reachability only. Postgres and Upstash stay on /health.
+// legacy-backend reachability only. Postgres and rate_limit_store stay on /health.
 
 import { emitHauskaHealthSignal } from "./health-signals.js";
 import { buildHealthReport, type DepHealth, type ProbeFns } from "./health.js";
@@ -65,3 +65,4 @@ export async function buildHealthzReportAndEmit(): Promise<HealthzReport> {
   });
   return report;
 }
+
