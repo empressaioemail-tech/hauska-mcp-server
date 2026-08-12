@@ -48,20 +48,25 @@ function widthedForKind(
       provenance: "seed" as const,
     };
   }
-  if (kind === "model-assisted" && role === "calibrated") {
-    return {
-      estimate: avgScore ?? 0.75,
-      n: Math.max(atomCount, 1),
-      intervalWidth: 0.2,
-      provenance: "live" as const,
-    };
-  }
   if (role === "calibrated") {
+    if (avgScore == null) {
+      return {
+        estimate: 0,
+        n: atomCount,
+        intervalWidth: 1,
+        provenance: "asserted" as const,
+      };
+    }
     return {
-      estimate: avgScore ?? (kind === "catalog" ? 0.95 : 0.85),
-      n: atomCount,
-      intervalWidth: atomCount > 0 ? 0.08 : 0.35,
-      provenance: atomCount > 0 ? ("backtest" as const) : ("seed" as const),
+      estimate: avgScore,
+      n: kind === "model-assisted" ? Math.max(atomCount, 1) : atomCount,
+      intervalWidth: kind === "model-assisted" ? 0.2 : atomCount > 0 ? 0.08 : 0.35,
+      provenance:
+        kind === "model-assisted"
+          ? ("live" as const)
+          : atomCount > 0
+            ? ("backtest" as const)
+            : ("seed" as const),
     };
   }
   return {
