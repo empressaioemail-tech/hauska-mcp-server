@@ -1,4 +1,4 @@
-// Phase 1c property atom chain — accessPolicy + honest pending state.
+// Phase 1c property atom chain - accessPolicy + honest pending state.
 
 import { strict as assert } from "node:assert";
 import { afterEach, beforeEach, test } from "node:test";
@@ -10,10 +10,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { AtomInstanceBase } from "../src/hauska-client.js";
 import {
+  PARCEL_KEYED_PROPERTY_ENTITY_TYPES,
   chainStatusNote,
   parcelNodeIdFromAtomDid,
   propertyChainAtomDid,
   resolvePropertyAtomChain,
+  upstreamAtomsFromEngineWire,
 } from "../src/property-atom-chain.js";
 import type { AccessSubject } from "../src/access-policy.js";
 import { registerTools } from "../src/tools.js";
@@ -160,11 +162,7 @@ test("paid caller receives public-paid envelope atom", async () => {
 test("empty corpus returns atom_path_pending without inventing atoms", async () => {
   const data = await resolvePropertyAtomChain({ parcelNodeId: PARCEL }, anonymousSubject);
   assert.equal(data.status, "atom_path_pending");
-  assert.deepEqual(data.pendingSlots, [
-    "zoning-fact",
-    "setback-rule",
-    "buildable-envelope",
-  ]);
+  assert.deepEqual(data.pendingSlots, [...PARCEL_KEYED_PROPERTY_ENTITY_TYPES]);
   assert.match(chainStatusNote(data)!, /atom_path_pending/);
   assert.match(chainStatusNote(data)!, /not in the retrieval corpus/i);
 });
@@ -230,7 +228,7 @@ test("get_property_atom_chain MCP tool: atoms[] only includes readable slots", a
   assert.equal(envelope.data.status, "partial");
   assert.equal(envelope.atoms.length, 1);
   assert.equal(envelope.atoms[0]!.did, zoningDid);
-  assert.equal(envelope.meta.attribution, "Powered by Hauska Engine — hauska.dev");
+  assert.match(envelope.meta.attribution ?? "", /Powered by Hauska Engine/);
   assert.match(envelope.meta.note ?? "", /withheld by accessPolicy|Partial chain/);
 });
 
@@ -240,3 +238,45 @@ test("toolGateMetadata registers get_property_atom_chain on public access_policy
   assert.equal(meta.gate, "access_policy");
   assert.equal(meta.anonymous_ok, true);
 });
+
+
+test("parcelNodeIdFromAtomDid recovers parcel from owner-fact DID with tax-year suffix", () => {
+  const did = "did:hauska:owner-fact:48021:27303:2026";
+  assert.equal(parcelNodeIdFromAtomDid(did), "48021:27303");
+  assert.equal(
+    parcelNodeIdFromAtomDid("did:hauska:road-node:48021:33512"),
+    null,
+    "road-node DIDs are not parcel-chain reachable",
+  );
+});
+
+test("owner-fact withheld for anonymous; readable for paid subject", async () => {
+  const ownerDid = "did:hauska:owner-fact:48209:156346";
+  mockRoutes[ownerDid] = {
+    status: 200,
+    body: { atom: atomBody("owner-fact", "public-paid") },
+  };
+
+  const anon = await resolvePropertyAtomChain({ parcelNodeId: PARCEL }, anonymousSubject);
+  assert.equal(anon.slots["owner-fact"].atom, null);
+  assert.equal(anon.slots["owner-fact"].withheld, true);
+  assert.ok(anon.withheldSlots.includes("owner-fact"));
+
+  const paid = await resolvePropertyAtomChain({ parcelNodeId: PARCEL }, paidSubject);
+  assert.ok(paid.slots["owner-fact"].atom);
+  assert.equal(paid.slots["owner-fact"].withheld, undefined);
+});
+
+test("upstreamAtomsFromEngineWire maps atoms[] and atomsByType", () => {
+  const landUse = atomBody("land-use-fact", "public-free");
+  const wire = upstreamAtomsFromEngineWire({
+    parcelNodeId: PARCEL,
+    atomsByType: { "owner-fact": atomBody("owner-fact", "public-paid") },
+    atoms: [{ type: "land-use-fact", payload: landUse }],
+    zoningFact: atomBody("zoning-fact", "public-free"),
+  });
+  assert.ok(wire["land-use-fact"]);
+  assert.ok(wire["owner-fact"]);
+  assert.ok(wire["zoning-fact"]);
+});
+

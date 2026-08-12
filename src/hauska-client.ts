@@ -23,6 +23,7 @@
 import type { AccessPolicy } from "@hauska/atom-contract";
 
 import { logger } from "./logger.js";
+import type { ParcelKeyedPropertyEntityType } from "./property-entity-types.js";
 
 const DEFAULT_BACKEND_URL = "http://localhost:8080";
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -36,7 +37,7 @@ function engineApiKey(): string {
 }
 
 // -----------------------------------------------------------------
-// Wire types — mirrored from `hauska-engine` storage and atom packages.
+// Wire types - mirrored from `hauska-engine` storage and atom packages.
 // -----------------------------------------------------------------
 
 export type CodeAtomEntityType =
@@ -47,12 +48,8 @@ export type CodeAtomEntityType =
   | "code-edition"
   | "jurisdiction-corpus";
 
-/** Property reasoning-chain entity types (Phase 1c catalog path). */
-export type PropertyAtomEntityType =
-  | "parcel-node"
-  | "zoning-fact"
-  | "setback-rule"
-  | "buildable-envelope";
+/** Property parcel-keyed entity types (derived from engine PROPERTY_ENTITY_TYPES). */
+export type PropertyAtomEntityType = ParcelKeyedPropertyEntityType;
 
 export type CatalogAtomEntityType = CodeAtomEntityType | PropertyAtomEntityType;
 
@@ -107,12 +104,24 @@ export interface GetAtomResponse {
   }>;
 }
 
+/** Entry in engine atom-chain `atoms[]` list. */
+export interface PropertyAtomChainWireAtomEntry {
+  did?: string;
+  type?: string;
+  kind?: string;
+  accessPolicy?: AccessPolicy;
+  payload?: AtomInstanceBase;
+}
+
 /** Wire shape for GET /property-nodes/:parcelNodeId/atom-chain (when deployed). */
 export interface PropertyAtomChainWireResponse {
   parcelNodeId: string;
-  zoningFact: AtomInstanceBase | null;
-  setbackRule: AtomInstanceBase | null;
-  buildableEnvelope: AtomInstanceBase | null;
+  zoningFact?: AtomInstanceBase | null;
+  setbackRule?: AtomInstanceBase | null;
+  buildableEnvelope?: AtomInstanceBase | null;
+  atomsByType?: Partial<Record<PropertyAtomEntityType, AtomInstanceBase | null>>;
+  atoms?: ReadonlyArray<PropertyAtomChainWireAtomEntry>;
+  attachingRoads?: ReadonlyArray<AtomInstanceBase>;
 }
 
 export interface AtomTraceProvenance {
@@ -160,7 +169,7 @@ export interface JurisdictionStatusSnapshot {
    * ADR-017 access tier propagated from the jurisdiction-corpus atom
    * (`@hauska/atom-contract@^1.1.0`). The substrate-MCP filter on
    * `list_jurisdictions` uses this to hide partnership-pending
-   * jurisdictions from unauthenticated callers. Absent on the wire ⇒
+   * jurisdictions from unauthenticated callers. Absent on the wire =>
    * treat as `"public-free"` (the engine docstring says the same).
    */
   accessPolicy?: AccessPolicy;
@@ -176,7 +185,7 @@ export interface QueryJurisdictionResponse {
 }
 
 // -----------------------------------------------------------------
-// Error type — surfaced to tool handlers so they can choose between
+// Error type - surfaced to tool handlers so they can choose between
 // "engine reachable, atom missing" (404) and "engine unreachable / 5xx"
 // (operator-actionable).
 // -----------------------------------------------------------------
@@ -351,7 +360,7 @@ export const hauskaClient = {
 
   /**
    * Property-node reasoning chain (Phase 1c). Returns null on 404 when the
-   * retrieval-api route is not yet deployed — callers fall back to per-DID fetch.
+   * retrieval-api route is not yet deployed - callers fall back to per-DID fetch.
    */
   async getPropertyAtomChain(params: {
     parcelNodeId: string;

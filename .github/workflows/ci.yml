@@ -12,6 +12,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Cross-repo drift guard reads engine PROPERTY_ENTITY_TYPES from source.
+      - name: Checkout hauska-engine (drift-test truth)
+        uses: actions/checkout@v4
+        with:
+          repository: empressaioemail-tech/hauska-engine
+          path: _engine_truth
+          sparse-checkout: |
+            packages/atoms/src/property-instances.ts
+          sparse-checkout-cone-mode: false
+
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
@@ -24,4 +34,6 @@ jobs:
         run: npm run lint
 
       - name: Test
+        env:
+          HAUSKA_ENGINE_PROPERTY_INSTANCES_PATH: ${{ github.workspace }}/_engine_truth/packages/atoms/src/property-instances.ts
         run: npm test

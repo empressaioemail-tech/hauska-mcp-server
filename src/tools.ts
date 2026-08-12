@@ -561,7 +561,7 @@ export function registerTools(server: McpServer) {
         .regex(ATOM_DID_REGEX, "atom_did must be a Hauska DID")
         .optional()
         .describe(
-          "Any property-chain atom DID (zoning-fact, setback-rule, buildable-envelope, parcel-node). Provide this OR parcel_node_id.",
+          "Any parcel-keyed property atom DID (engine PROPERTY_ENTITY_TYPES except road-node). Provide this OR parcel_node_id.",
         ),
     },
     async ({ parcel_node_id, atom_did }) => {

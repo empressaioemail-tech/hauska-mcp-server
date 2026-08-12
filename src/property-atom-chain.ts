@@ -1,8 +1,8 @@
 // Property-node reasoning-chain catalog resolution (Phase 1c).
 //
-// Serves zoning-fact -> setback-rule -> buildable-envelope via the
-// CATALOG-TOOL path (per-atom accessPolicy post-fetch), not the
-// map/reporting package tier path.
+// Serves all parcel-keyed property entity types (derived from engine
+// PROPERTY_ENTITY_TYPES minus road-node) via the CATALOG-TOOL path
+// (per-atom accessPolicy post-fetch), not the map/reporting package tier path.
 
 import type { AccessPolicy } from "@hauska/atom-contract";
 
@@ -16,30 +16,40 @@ import {
   EngineHttpError,
   type AtomInstanceBase,
   type GetAtomResponse,
+  type PropertyAtomChainWireResponse,
   hauskaClient,
 } from "./hauska-client.js";
+import {
+  LEGACY_REASONING_CHAIN_SLOTS,
+  PARCEL_KEYED_PROPERTY_ENTITY_TYPES,
+  type LegacyReasoningChainSlot,
+  type ParcelKeyedPropertyEntityType,
+  isParcelKeyedPropertyEntityType,
+} from "./property-entity-types.js";
 
-/** Property reasoning-chain entity types (Phase 1 atom family). */
-export const PROPERTY_CHAIN_ENTITY_TYPES = [
-  "parcel-node",
-  "zoning-fact",
-  "setback-rule",
-  "buildable-envelope",
-] as const;
+export {
+  LEGACY_REASONING_CHAIN_SLOTS,
+  PARCEL_KEYED_PROPERTY_ENTITY_TYPES,
+  type LegacyReasoningChainSlot,
+  type ParcelKeyedPropertyEntityType,
+};
 
-export type PropertyChainEntityType = (typeof PROPERTY_CHAIN_ENTITY_TYPES)[number];
+/** @deprecated use PARCEL_KEYED_PROPERTY_ENTITY_TYPES */
+export const PROPERTY_CHAIN_ENTITY_TYPES = PARCEL_KEYED_PROPERTY_ENTITY_TYPES;
 
-export const PROPERTY_CHAIN_SLOT_TYPES = [
-  "zoning-fact",
-  "setback-rule",
-  "buildable-envelope",
-] as const;
+export type PropertyChainEntityType = ParcelKeyedPropertyEntityType;
 
-export type PropertyChainSlot = (typeof PROPERTY_CHAIN_SLOT_TYPES)[number];
+/** @deprecated use LEGACY_REASONING_CHAIN_SLOTS */
+export const PROPERTY_CHAIN_SLOT_TYPES = LEGACY_REASONING_CHAIN_SLOTS;
 
-/** G6 canonical id shape — must match PE `PARCEL_NODE_ID_SOURCE` (F1b). */
+export type PropertyChainSlot = LegacyReasoningChainSlot;
+
+/** G6 canonical id shape - must match PE `PARCEL_NODE_ID_SOURCE` (F1b). */
 export const PARCEL_NODE_ID_SOURCE = String.raw`^\d{5}:[^/\s]+$`;
 export const PARCEL_NODE_ID_REGEX = new RegExp(PARCEL_NODE_ID_SOURCE);
+
+/** Prefix extract for entityIds that extend past bare parcelNodeId (e.g. owner-fact tax year). */
+const PARCEL_NODE_ID_PREFIX = /^(\d{5}:[^:/\s]+)/;
 
 export type PropertyAtomChainStatus =
   | "ready"
@@ -48,7 +58,7 @@ export type PropertyAtomChainStatus =
   | "not_ready";
 
 export interface PropertyChainAtomSlot {
-  slot: PropertyChainSlot;
+  slot: PropertyChainEntityType;
   atomDid: string;
   atom: AtomInstanceBase | null;
   /** True when the atom exists upstream but the caller lacks accessPolicy entitlement. */
@@ -59,15 +69,18 @@ export interface PropertyChainAtomSlot {
 export interface PropertyAtomChainData {
   parcelNodeId: string;
   status: PropertyAtomChainStatus;
+  /** All parcel-keyed property types (engine PROPERTY_ENTITY_TYPES minus road-node). */
+  slots: Record<PropertyChainEntityType, PropertyChainAtomSlot>;
+  /** Legacy triple for consumers that still read camelCase keys. */
   chain: {
     zoningFact: PropertyChainAtomSlot;
     setbackRule: PropertyChainAtomSlot;
     buildableEnvelope: PropertyChainAtomSlot;
   };
   /** Slots with no corpus row yet (honest pending, not fabrication). */
-  pendingSlots: PropertyChainSlot[];
+  pendingSlots: PropertyChainEntityType[];
   /** Slots withheld by accessPolicy (exist but not readable). */
-  withheldSlots: PropertyChainSlot[];
+  withheldSlots: PropertyChainEntityType[];
 }
 
 export interface ResolvePropertyAtomChainInput {
@@ -75,7 +88,9 @@ export interface ResolvePropertyAtomChainInput {
   atomDid?: string;
 }
 
-function slotKey(slot: PropertyChainSlot): keyof PropertyAtomChainData["chain"] {
+function legacyChainKey(
+  slot: LegacyReasoningChainSlot,
+): keyof PropertyAtomChainData["chain"] {
   switch (slot) {
     case "zoning-fact":
       return "zoningFact";
@@ -86,7 +101,7 @@ function slotKey(slot: PropertyChainSlot): keyof PropertyAtomChainData["chain"] 
   }
 }
 
-/** Canonical DID for a parcel-node anchor and each chain slot. */
+/** Canonical DID for a parcel-keyed property atom (bare parcelNodeId suffix). */
 export function propertyChainAtomDid(
   parcelNodeId: string,
   entityType: PropertyChainEntityType,
@@ -94,13 +109,36 @@ export function propertyChainAtomDid(
   return `did:hauska:${entityType}:${parcelNodeId}`;
 }
 
-/** Extract parcelNodeId from a property-chain atom DID, if shaped correctly. */
+export function parcelNodeIdFromEntityIdSuffix(entityIdSuffix: string): string | null {
+  const trimmed = entityIdSuffix.trim();
+  const match = PARCEL_NODE_ID_PREFIX.exec(trimmed);
+  if (!match) return null;
+  const candidate = match[1]!;
+  return PARCEL_NODE_ID_REGEX.test(candidate) ? candidate : null;
+}
+
+export interface ParsedPropertyAtomDid {
+  entityType: PropertyChainEntityType;
+  entityIdSuffix: string;
+}
+
+/** Structural Hauska DID parse + parcel-keyed entity type validation. */
+export function parsePropertyAtomDid(atomDid: string): ParsedPropertyAtomDid | null {
+  const trimmed = atomDid.trim();
+  const match = /^did:hauska:([a-z0-9-]+):(.+)$/.exec(trimmed);
+  if (!match) return null;
+  const entityType = match[1]!;
+  if (!isParcelKeyedPropertyEntityType(entityType)) return null;
+  const entityIdSuffix = match[2]!;
+  if (!parcelNodeIdFromEntityIdSuffix(entityIdSuffix)) return null;
+  return { entityType, entityIdSuffix };
+}
+
+/** Extract parcelNodeId from any parcel-keyed property atom DID. */
 export function parcelNodeIdFromAtomDid(atomDid: string): string | null {
-  const match =
-    /^did:hauska:(?:parcel-node|zoning-fact|setback-rule|buildable-envelope):(\d{5}:[^/\s]+)$/.exec(
-      atomDid,
-    );
-  return match?.[1] ?? null;
+  const parsed = parsePropertyAtomDid(atomDid);
+  if (!parsed) return null;
+  return parcelNodeIdFromEntityIdSuffix(parsed.entityIdSuffix);
 }
 
 export function normalizeParcelNodeId(raw: string): string | null {
@@ -124,7 +162,7 @@ function applyAccessPolicyToAtom(
   tool: string,
   atom: AtomInstanceBase,
   atomDid: string,
-  slot: PropertyChainSlot,
+  slot: PropertyChainEntityType,
 ): PropertyChainAtomSlot {
   const target = atomAccessTarget(atom);
   if (canReadAccessTarget(subject, target)) {
@@ -148,7 +186,7 @@ function applyAccessPolicyToAtom(
 }
 
 function emptySlot(
-  slot: PropertyChainSlot,
+  slot: PropertyChainEntityType,
   parcelNodeId: string,
 ): PropertyChainAtomSlot {
   return {
@@ -158,25 +196,42 @@ function emptySlot(
   };
 }
 
+function legacyChainFromSlots(
+  slots: Record<PropertyChainEntityType, PropertyChainAtomSlot>,
+): PropertyAtomChainData["chain"] {
+  return {
+    zoningFact: slots["zoning-fact"],
+    setbackRule: slots["setback-rule"],
+    buildableEnvelope: slots["buildable-envelope"],
+  };
+}
+
 function buildChainData(
   parcelNodeId: string,
-  slots: Record<PropertyChainSlot, PropertyChainAtomSlot>,
+  slots: Record<PropertyChainEntityType, PropertyChainAtomSlot>,
 ): PropertyAtomChainData {
-  const pendingSlots = PROPERTY_CHAIN_SLOT_TYPES.filter((s) => {
+  const allTypes = PARCEL_KEYED_PROPERTY_ENTITY_TYPES;
+  const pendingSlots = allTypes.filter((s) => {
     const row = slots[s];
     return row.atom === null && !row.withheld;
   });
-  const withheldSlots = PROPERTY_CHAIN_SLOT_TYPES.filter((s) => slots[s].withheld);
-  const presentCount = PROPERTY_CHAIN_SLOT_TYPES.filter(
-    (s) => slots[s].atom !== null,
-  ).length;
+  const withheldSlots = allTypes.filter((s) => slots[s].withheld);
+
+  const statusTypes = LEGACY_REASONING_CHAIN_SLOTS;
+  const legacyPending = statusTypes.filter((s) => {
+    const row = slots[s];
+    return row.atom === null && !row.withheld;
+  });
+  const legacyWithheld = statusTypes.filter((s) => slots[s].withheld);
+  const legacyPresent = statusTypes.filter((s) => slots[s].atom !== null).length;
+  const allAbsent = allTypes.every((s) => slots[s].atom === null && !slots[s].withheld);
 
   let status: PropertyAtomChainStatus;
-  if (presentCount === 0 && pendingSlots.length === PROPERTY_CHAIN_SLOT_TYPES.length) {
+  if (legacyPresent === 0 && allAbsent) {
     status = "atom_path_pending";
-  } else if (presentCount === 0) {
+  } else if (legacyPresent === 0) {
     status = "not_ready";
-  } else if (pendingSlots.length > 0 || withheldSlots.length > 0) {
+  } else if (legacyPending.length > 0 || legacyWithheld.length > 0) {
     status = "partial";
   } else {
     status = "ready";
@@ -185,11 +240,8 @@ function buildChainData(
   return {
     parcelNodeId,
     status,
-    chain: {
-      zoningFact: slots["zoning-fact"],
-      setbackRule: slots["setback-rule"],
-      buildableEnvelope: slots["buildable-envelope"],
-    },
+    slots,
+    chain: legacyChainFromSlots(slots),
     pendingSlots,
     withheldSlots,
   };
@@ -199,18 +251,76 @@ async function fetchSlotAtom(atomDid: string): Promise<GetAtomResponse> {
   return hauskaClient.getAtom({ atomDid });
 }
 
+function atomFromWireEntry(entry: unknown): AtomInstanceBase | null {
+  if (!entry || typeof entry !== "object") return null;
+  const row = entry as Record<string, unknown>;
+  if (row.payload && typeof row.payload === "object") {
+    return row.payload as AtomInstanceBase;
+  }
+  return row as AtomInstanceBase;
+}
+
+function mergeUpstreamAtom(
+  target: Partial<Record<PropertyChainEntityType, AtomInstanceBase | null>>,
+  entityType: PropertyChainEntityType,
+  atom: AtomInstanceBase | null | undefined,
+): void {
+  if (atom) {
+    target[entityType] = atom;
+  } else if (!(entityType in target)) {
+    target[entityType] = null;
+  }
+}
+
+/** Normalize engine chain wire (legacy camelCase, atoms[], optional atomsByType). */
+export function upstreamAtomsFromEngineWire(
+  wire: PropertyAtomChainWireResponse,
+): Partial<Record<PropertyChainEntityType, AtomInstanceBase | null>> {
+  const out: Partial<Record<PropertyChainEntityType, AtomInstanceBase | null>> = {};
+
+  if (wire.atomsByType) {
+    for (const entityType of PARCEL_KEYED_PROPERTY_ENTITY_TYPES) {
+      mergeUpstreamAtom(out, entityType, wire.atomsByType[entityType] ?? null);
+    }
+  }
+
+  mergeUpstreamAtom(out, "zoning-fact", wire.zoningFact);
+  mergeUpstreamAtom(out, "setback-rule", wire.setbackRule);
+  mergeUpstreamAtom(out, "buildable-envelope", wire.buildableEnvelope);
+
+  if (wire.atoms) {
+    for (const entry of wire.atoms) {
+      const entityTypeRaw =
+        (typeof entry.type === "string" && entry.type) ||
+        (entry.payload &&
+          typeof entry.payload === "object" &&
+          typeof (entry.payload as AtomInstanceBase).entityType === "string" &&
+          (entry.payload as AtomInstanceBase).entityType) ||
+        null;
+      if (!entityTypeRaw || !isParcelKeyedPropertyEntityType(entityTypeRaw)) {
+        continue;
+      }
+      mergeUpstreamAtom(out, entityTypeRaw, atomFromWireEntry(entry));
+    }
+  }
+
+  for (const entityType of PARCEL_KEYED_PROPERTY_ENTITY_TYPES) {
+    if (!(entityType in out)) {
+      out[entityType] = null;
+    }
+  }
+
+  return out;
+}
+
 /** Try engine chain endpoint; returns null when route is not deployed. */
 async function fetchEnginePropertyChain(
   parcelNodeId: string,
-): Promise<Record<PropertyChainSlot, AtomInstanceBase | null> | null> {
+): Promise<Partial<Record<PropertyChainEntityType, AtomInstanceBase | null>> | null> {
   try {
     const wire = await hauskaClient.getPropertyAtomChain({ parcelNodeId });
     if (!wire) return null;
-    return {
-      "zoning-fact": wire.zoningFact,
-      "setback-rule": wire.setbackRule,
-      "buildable-envelope": wire.buildableEnvelope,
-    };
+    return upstreamAtomsFromEngineWire(wire);
   } catch (err) {
     if (err instanceof EngineHttpError && (err.status === 404 || err.status === 501)) {
       return null;
@@ -221,17 +331,16 @@ async function fetchEnginePropertyChain(
 
 async function fetchSlotsByDid(
   parcelNodeId: string,
-): Promise<Record<PropertyChainSlot, AtomInstanceBase | null>> {
+): Promise<Partial<Record<PropertyChainEntityType, AtomInstanceBase | null>>> {
   const entries = await Promise.all(
-    PROPERTY_CHAIN_SLOT_TYPES.map(async (slot) => {
-      const atomDid = propertyChainAtomDid(parcelNodeId, slot);
+    PARCEL_KEYED_PROPERTY_ENTITY_TYPES.map(async (entityType) => {
+      const atomDid = propertyChainAtomDid(parcelNodeId, entityType);
       const res = await fetchSlotAtom(atomDid);
-      return [slot, res.atom] as const;
+      return [entityType, res.atom] as const;
     }),
   );
-  return Object.fromEntries(entries) as Record<
-    PropertyChainSlot,
-    AtomInstanceBase | null
+  return Object.fromEntries(entries) as Partial<
+    Record<PropertyChainEntityType, AtomInstanceBase | null>
   >;
 }
 
@@ -253,7 +362,7 @@ export async function resolvePropertyAtomChain(
     parcelNodeId = parcelNodeIdFromAtomDid(input.atomDid);
     if (!parcelNodeId) {
       throw new PropertyAtomChainInputError(
-        `atom_did must be a property-chain DID (parcel-node|zoning-fact|setback-rule|buildable-envelope); got "${input.atomDid}".`,
+        `atom_did must be a parcel-keyed property atom DID (road-node excluded); got "${input.atomDid}".`,
       );
     }
   } else {
@@ -266,15 +375,28 @@ export async function resolvePropertyAtomChain(
     (await fetchEnginePropertyChain(parcelNodeId)) ??
     (await fetchSlotsByDid(parcelNodeId));
 
-  const slots = {} as Record<PropertyChainSlot, PropertyChainAtomSlot>;
-  for (const slot of PROPERTY_CHAIN_SLOT_TYPES) {
-    const atomDid = propertyChainAtomDid(parcelNodeId, slot);
-    const raw = upstream[slot];
+  const slots = {} as Record<PropertyChainEntityType, PropertyChainAtomSlot>;
+  for (const entityType of PARCEL_KEYED_PROPERTY_ENTITY_TYPES) {
+    const raw = upstream[entityType];
     if (!raw) {
-      slots[slot] = emptySlot(slot, parcelNodeId);
+      slots[entityType] = emptySlot(entityType, parcelNodeId);
       continue;
     }
-    slots[slot] = applyAccessPolicyToAtom(subject, tool, raw, atomDid, slot);
+    // Prefer the stored DID / entityId - owner/land-use/cad-roll (and
+    // similar) append taxYear or other suffixes; bare parcel DID is wrong.
+    const atomDid =
+      typeof raw.atomDid === "string" && raw.atomDid.startsWith("did:hauska:")
+        ? raw.atomDid
+        : typeof raw.entityId === "string" && raw.entityId.length > 0
+          ? `did:hauska:${entityType}:${raw.entityId}`
+          : propertyChainAtomDid(parcelNodeId, entityType);
+    slots[entityType] = applyAccessPolicyToAtom(
+      subject,
+      tool,
+      raw,
+      atomDid,
+      entityType,
+    );
   }
 
   return buildChainData(parcelNodeId, slots);
@@ -294,7 +416,7 @@ export function chainStatusNote(data: PropertyAtomChainData): string | undefined
     case "atom_path_pending":
       return (
         "PROPERTY_ATOM_PATH atoms are not in the retrieval corpus for this parcel yet. " +
-        "Status atom_path_pending — no values fabricated."
+        "Status atom_path_pending - no values fabricated."
       );
     case "partial":
       if (data.withheldSlots.length > 0 && data.pendingSlots.length > 0) {
@@ -312,14 +434,19 @@ export function chainStatusNote(data: PropertyAtomChainData): string | undefined
   }
 }
 
-/** Atoms present in the envelope provenance list (readable slots only). */
+/** Atoms present in the chain (readable slots only). */
 export function readableChainAtoms(
   data: PropertyAtomChainData,
 ): AtomInstanceBase[] {
   const out: AtomInstanceBase[] = [];
-  for (const slot of PROPERTY_CHAIN_SLOT_TYPES) {
-    const row = data.chain[slotKey(slot)];
+  for (const entityType of PARCEL_KEYED_PROPERTY_ENTITY_TYPES) {
+    const row = data.slots[entityType];
     if (row.atom) out.push(row.atom);
   }
   return out;
+}
+
+/** @deprecated use data.slots */
+export function slotKey(slot: LegacyReasoningChainSlot): keyof PropertyAtomChainData["chain"] {
+  return legacyChainKey(slot);
 }
