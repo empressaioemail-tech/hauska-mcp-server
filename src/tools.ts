@@ -503,17 +503,15 @@ export function registerTools(server: McpServer) {
           return envelopeContent(__readEnv);
         }
         if (!assertAtomReadable("get_atom", response.atom)) {
-          const __readEnv = getAtomEnvelope({ atom: null, composition: [] }, {
-            tier,
-            note: `No atom found at DID ${atom_id}.`,
-          });
           logToolRead({
             tool: "get_atom",
             atom_id,
             tier,
             found: false,
-          }, __readEnv.atoms);
-          return envelopeContent(__readEnv);
+          }, []);
+          return errorContent(
+            `Atom at DID ${atom_id} is not readable under the caller's accessPolicy.`,
+          );
         }
         const composition = response.composition?.filter(
           (edge) => edge.atom && assertAtomReadable("get_atom", edge.atom),
