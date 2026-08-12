@@ -37,3 +37,40 @@ jobs:
         env:
           HAUSKA_ENGINE_PROPERTY_INSTANCES_PATH: ${{ github.workspace }}/_engine_truth/packages/atoms/src/property-instances.ts
         run: npm test
+
+  ci-deny-as-no-atom-found:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Fail if access-deny masquerades as corpus miss
+        run: |
+          python3 - <<'PY'
+          import re, sys
+          from pathlib import Path
+          src = Path("src/tools.ts").read_text(encoding="utf-8")
+          needle = "No atom found at DID"
+          hits = []
+          for m in re.finditer(r"if\s*\(\s*!assertAtomReadable\(", src):
+              i = src.find("{", m.end())
+              if i < 0:
+                  continue
+              depth = 0
+              j = i
+              while j < len(src):
+                  if src[j] == "{":
+                      depth += 1
+                  elif src[j] == "}":
+                      depth -= 1
+                      if depth == 0:
+                          j += 1
+                          break
+                  j += 1
+              block = src[m.start():j]
+              if needle in block:
+                  hits.append(src[:m.start()].count("\n") + 1)
+          if hits:
+              print("ci-deny-as-no-atom-found FAIL: pattern 'No atom found at DID' inside !assertAtomReadable branches at lines", hits)
+              sys.exit(1)
+          print("ci-deny-as-no-atom-found OK")
+          PY
