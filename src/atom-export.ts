@@ -1,12 +1,12 @@
-// atom_export — DownloadableAtom assembly via @hauska/atom-contract/export.
+// atom_export — DownloadableAtom assembly via @empressaio/atom-contract/export.
 
-import type { AccessPolicy } from "@hauska/atom-contract";
+import type { AccessPolicy } from "@empressaio/atom-contract";
 import {
   createDownloadableAtom,
   type DownloadableAtom,
-} from "@hauska/atom-contract/export";
-import type { ContextSummary } from "@hauska/atom-contract";
-import type { ReadContract } from "@hauska/atom-contract/read-contract";
+} from "@empressaio/atom-contract/export";
+import type { ContextSummary } from "@empressaio/atom-contract";
+import type { ReadContract } from "@empressaio/atom-contract/read-contract";
 
 import type { AtomInstanceBase, GetAtomResponse } from "./hauska-client.js";
 import { canReadAccessTarget, effectiveAccessPolicy } from "./access-policy.js";

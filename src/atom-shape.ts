@@ -17,9 +17,9 @@
 // stays em-dash-free per CLAUDE.md.
 //
 // F4 (Calibrated Spine): every read envelope carries a
-// @hauska/atom-contract read-contract object alongside provenance.
+// @empressaio/atom-contract read-contract object alongside provenance.
 
-import type { ReadContract } from "@hauska/atom-contract/read-contract";
+import type { ReadContract } from "@empressaio/atom-contract/read-contract";
 
 import {
   buildReadContract,
@@ -827,7 +827,7 @@ export function siteTopographyEnvelope(
 
 /**
  * Coverage-honest confidence as it reaches the parcel-terrain-model surface.
- * Mirrors the @hauska/atom-contract WidthedConfidence shape closely enough
+ * Mirrors the @empressaio/atom-contract WidthedConfidence shape closely enough
  * for the tile to read { estimate, provenance } without ever seeing a bare
  * number. `provenance` is ALWAYS present.
  */

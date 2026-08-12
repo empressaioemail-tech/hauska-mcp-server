@@ -8,7 +8,7 @@
 // hauska-engine PR #7, so the consumer now just selects the right
 // filter per caller tier.)
 //
-// Per ADR-017 via @hauska/atom-contract v1.1.0:
+// Per ADR-017 via @empressaio/atom-contract v1.1.0:
 //   accessPolicy: "public-free" | "public-paid" | "platform-internal" | "tenant-private"
 //
 // The rule (accessPoliciesForTier in tools.ts):
@@ -23,7 +23,7 @@
 import { strict as assert } from "node:assert";
 import { afterEach, beforeEach, test } from "node:test";
 
-import type { AccessPolicy } from "@hauska/atom-contract";
+import type { AccessPolicy } from "@empressaio/atom-contract";
 
 import {
   hauskaClient,
@@ -83,7 +83,7 @@ function snap(
 // accessPoliciesForTier — the per-tier filter-selection rule.
 // -----------------------------------------------------------------
 
-test("AccessPolicy import resolves from @hauska/atom-contract", () => {
+test("AccessPolicy import resolves from @empressaio/atom-contract", () => {
   const tag: AccessPolicy = "public-free";
   assert.equal(tag, "public-free");
 });

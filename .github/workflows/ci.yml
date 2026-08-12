@@ -88,3 +88,70 @@ jobs:
             exit 1
           fi
           echo "ci-hardcoded-did-type-union OK"
+
+  ci-gate-map-vs-server-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set-equal server.tool names vs PUBLIC∪CODEX∪MAP∪REPORTING
+        run: |
+          python3 - <<'PY'
+          import re, sys
+          from pathlib import Path
+          tools_src = Path("src/tools.ts").read_text(encoding="utf-8")
+          registered = re.findall(r'server\.tool\(\s*"([^"]+)"', tools_src)
+          if not registered:
+              print("ci-gate-map-vs-server-tool FAIL: no server.tool first-arg names extracted")
+              sys.exit(1)
+          gates_src = Path("src/product-gates.ts").read_text(encoding="utf-8")
+          union: set[str] = set()
+          for name in ("PUBLIC_CATALOG_TOOLS", "CODEX_TOOLS", "MAP_TOOLS", "REPORTING_TOOLS"):
+              m = re.search(rf'(?:export\s+)?const {name} = new Set\(\[(.*?)\]\)', gates_src, re.S)
+              if not m:
+                  print(f"ci-gate-map-vs-server-tool FAIL: {name} set not found")
+                  sys.exit(1)
+              union.update(re.findall(r'"([^"]+)"', m.group(1)))
+          remainder = sorted(set(registered) - union)
+          stale = sorted(union - set(registered))
+          if remainder or stale:
+              if remainder:
+                  print("ci-gate-map-vs-server-tool FAIL remainder (server.tool not in sets):", remainder)
+              if stale:
+                  print("ci-gate-map-vs-server-tool FAIL stale (sets not in server.tool):", stale)
+              sys.exit(1)
+          print(f"ci-gate-map-vs-server-tool OK ({len(registered)} tools)")
+          PY
+
+  ci-dual-atom-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Fail dual @hauska + @empressaio atom-contract
+        run: |
+          python3 - <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          pkg = json.loads(Path("package.json").read_text(encoding="utf-8"))
+          deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+          has_hauska = "@hauska/atom-contract" in deps
+          has_emp = "@empressaio/atom-contract" in deps
+          if has_hauska and has_emp:
+              print("ci-dual-atom-contract FAIL: both @hauska/atom-contract and @empressaio/atom-contract declared in package.json")
+              sys.exit(1)
+          src_hits = []
+          for p in Path("src").rglob("*"):
+              if p.suffix not in {".ts", ".js", ".mjs"}:
+                  continue
+              text = p.read_text(encoding="utf-8")
+              if "@hauska/atom-contract" in text:
+                  src_hits.append(str(p).replace("\\", "/"))
+          if src_hits:
+              print("ci-dual-atom-contract FAIL: @hauska/atom-contract still in src/**:", src_hits)
+              sys.exit(1)
+          if has_hauska:
+              print("ci-dual-atom-contract FAIL: package.json still declares @hauska/atom-contract")
+              sys.exit(1)
+          print("ci-dual-atom-contract OK")
+          PY

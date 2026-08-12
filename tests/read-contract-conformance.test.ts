@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { validateAtomConformance, ATOM_CONFORMANCE_TARGET_VERSION } from "@hauska/atom-contract/conformance";
+import { validateAtomConformance, ATOM_CONFORMANCE_TARGET_VERSION } from "@empressaio/atom-contract/conformance";
 
 import {
   buildEnvelope,

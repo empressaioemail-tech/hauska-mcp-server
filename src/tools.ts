@@ -11,7 +11,7 @@
 //   5. Tier-aware behavior reads from request-scoped AsyncLocalStorage so
 //      tool handlers do not need access to the Express request.
 
-import type { AccessPolicy } from "@hauska/atom-contract";
+import type { AccessPolicy } from "@empressaio/atom-contract";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
@@ -350,7 +350,7 @@ async function requireToolProduct(
 function finalizeReadEnvelope<T>(
   tool: string,
   envelope: ToolEnvelope<T>,
-  accessPolicy?: import("@hauska/atom-contract").AccessPolicy,
+  accessPolicy?: import("@empressaio/atom-contract").AccessPolicy,
 ): ToolEnvelope<T> {
   const conformance = checkReadToolConformance({
     tool,
@@ -523,7 +523,7 @@ export function registerTools(server: McpServer) {
             { ...response, composition },
             { tier },
           ),
-          response.atom.accessPolicy as import("@hauska/atom-contract").AccessPolicy | undefined,
+          response.atom.accessPolicy as import("@empressaio/atom-contract").AccessPolicy | undefined,
         );
         logToolRead({
           tool: "get_atom",
@@ -2044,7 +2044,7 @@ export function registerTools(server: McpServer) {
         const __readEnv = finalizeReadEnvelope(
           "atom_trace",
           atomTraceEnvelope(trace, { tier }),
-          trace?.atom?.accessPolicy as import("@hauska/atom-contract").AccessPolicy | undefined,
+          trace?.atom?.accessPolicy as import("@empressaio/atom-contract").AccessPolicy | undefined,
         );
         logToolRead({
           tool: "atom_trace",
@@ -5598,7 +5598,7 @@ export function registerTools(server: McpServer) {
                 : "Calibration overlay route not available — returning catalog read-contract.",
             },
           ),
-          getAtom.atom.accessPolicy as import("@hauska/atom-contract").AccessPolicy | undefined,
+          getAtom.atom.accessPolicy as import("@empressaio/atom-contract").AccessPolicy | undefined,
         );
         logToolRead({
           tool: "read_atom_calibration",

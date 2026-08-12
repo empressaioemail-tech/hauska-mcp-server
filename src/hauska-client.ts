@@ -20,7 +20,7 @@
 // packages into the mcp-server build graph. If the engine contract ever
 // drifts, the mismatch surfaces in `tools.ts` consumers as a type error.
 
-import type { AccessPolicy } from "@hauska/atom-contract";
+import type { AccessPolicy } from "@empressaio/atom-contract";
 
 import { logger } from "./logger.js";
 import type { ParcelKeyedPropertyEntityType } from "./property-entity-types.js";
@@ -167,7 +167,7 @@ export interface JurisdictionStatusSnapshot {
   driftStatus: "clean" | "amendments-pending" | "stale";
   /**
    * ADR-017 access tier propagated from the jurisdiction-corpus atom
-   * (`@hauska/atom-contract@^1.1.0`). The substrate-MCP filter on
+   * (`@empressaio/atom-contract@^1.1.0`). The substrate-MCP filter on
    * `list_jurisdictions` uses this to hide partnership-pending
    * jurisdictions from unauthenticated callers. Absent on the wire =>
    * treat as `"public-free"` (the engine docstring says the same).

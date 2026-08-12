@@ -4,7 +4,7 @@
 // given its declared accessPolicy, jurisdictionTenant, and optional
 // tenant-shared list. Denied reads are audit-logged by the tool layer.
 
-import type { AccessPolicy } from "@hauska/atom-contract";
+import type { AccessPolicy } from "@empressaio/atom-contract";
 
 import type { AuthContext } from "./auth.js";
 import { logger } from "./logger.js";
@@ -12,7 +12,7 @@ import type { Tier } from "./tiers.js";
 
 /**
  * Access policy enforced at the MCP gate. Equal to the contract union:
- * @hauska/atom-contract >=1.2 supplies the full five-value union including
+ * @empressaio/atom-contract >=1.2 supplies the full five-value union including
  * "tenant-shared", so no local extension is needed (verified against 1.6.1).
  */
 export type EnforcedAccessPolicy = AccessPolicy;

@@ -3,7 +3,7 @@
 import { strict as assert } from "node:assert";
 import { afterEach, beforeEach, test } from "node:test";
 
-import type { AccessPolicy } from "@hauska/atom-contract";
+import type { AccessPolicy } from "@empressaio/atom-contract";
 
 import type { AuthContext } from "../src/auth.js";
 import { hauskaClient } from "../src/hauska-client.js";

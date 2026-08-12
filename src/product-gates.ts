@@ -18,7 +18,7 @@ export interface ToolProductGate {
   anonymous_ok: boolean;
 }
 
-const MAP_TOOLS = new Set([
+export const MAP_TOOLS = new Set([
   "assemble_map_layers",
   "get_parcel_polygon",
   "get_hazard_profile",
@@ -28,7 +28,7 @@ const MAP_TOOLS = new Set([
   "generate_parcel_terrain_model",
 ]);
 
-const REPORTING_TOOLS = new Set([
+export const REPORTING_TOOLS = new Set([
   "compose_workspace",
   "atom_export",
   "read_atom_calibration",
@@ -77,20 +77,23 @@ const REPORTING_TOOLS = new Set([
   "cortex_deliverable_letter_render_download",
 ]);
 
-const PUBLIC_CATALOG_TOOLS = new Set([
+export const PUBLIC_CATALOG_TOOLS = new Set([
   "search_atoms",
   "get_atom",
   "get_property_atom_chain",
   "refresh_parcel_terrain_export",
   "refresh_parcel_site_plan_export",
   "refresh_parcel_dossier_export",
+  "download_parcel_terrain_export",
+  "download_parcel_site_plan_export",
+  "download_parcel_dossier_export",
   "query_jurisdiction",
   "search_permit_atoms",
   "list_jurisdictions",
   "atom_trace",
 ]);
 
-const CODEX_TOOLS = new Set([
+export const CODEX_TOOLS = new Set([
   "codex_finding_generation",
   "codex_override_write",
   "codex_briefing_fetch",
@@ -134,6 +137,33 @@ export function toolGateMetadata(name: string): ToolProductGate {
       gate: "access_policy",
       gate_summary:
         "Public catalog paid property-dossier PDF export (public-paid) — sibling of refresh_parcel_site_plan_export, same gate shape. Requires X-Hauska-Key with paid entitlement; anonymous/free denied. One SDK meter per export request via authorizePaidCall.",
+      anonymous_ok: false,
+    };
+  }
+  if (name === "download_parcel_terrain_export") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Public catalog paid terrain download (public-paid). Second hop of refresh_parcel_terrain_export; identified caller required; anonymous/free denied. Not separately metered.",
+      anonymous_ok: false,
+    };
+  }
+  if (name === "download_parcel_site_plan_export") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Public catalog paid site-plan download (public-paid). Second hop of refresh_parcel_site_plan_export; identified caller required; anonymous/free denied. Not separately metered.",
+      anonymous_ok: false,
+    };
+  }
+  if (name === "download_parcel_dossier_export") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Public catalog paid dossier download (public-paid). Second hop of refresh_parcel_dossier_export; identified caller required; anonymous/free denied. Not separately metered.",
       anonymous_ok: false,
     };
   }
@@ -192,6 +222,15 @@ export function toolGateMetadata(name: string): ToolProductGate {
     gate_summary: "Requires authenticated API key.",
     anonymous_ok: false,
   };
+}
+
+export function cataloguedToolNames(): Set<string> {
+  return new Set([
+    ...PUBLIC_CATALOG_TOOLS,
+    ...CODEX_TOOLS,
+    ...MAP_TOOLS,
+    ...REPORTING_TOOLS,
+  ]);
 }
 
 /** Full tool → gate mapping for operator close reports. */

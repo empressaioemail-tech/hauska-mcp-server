@@ -3,7 +3,7 @@
 // Mirrors services/engine-api/src/gate-front-context.ts. The MCP gate is
 // the sole authority for tenant + package resolution before proxying.
 
-import type { AccessPolicy } from "@hauska/atom-contract";
+import type { AccessPolicy } from "@empressaio/atom-contract";
 
 import type { AuthContext } from "./auth.js";
 import type { Product } from "./products.js";
