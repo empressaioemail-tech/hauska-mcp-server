@@ -1,6 +1,10 @@
 // LLM-first tool descriptions (GTM sprint M2).
 // Tier + jurisdiction_key examples + typical failure modes per tool group.
 
+import { PARCEL_KEYED_PROPERTY_ENTITY_TYPES } from "./property-entity-types.js";
+
+const PARCEL_KEYED_TYPE_LIST = PARCEL_KEYED_PROPERTY_ENTITY_TYPES.join(", ");
+
 export const PUBLIC_TIER =
   "Tier: public Layer 1 (no API key). Example jurisdiction_key: bastrop-tx, grand-county-co. " +
   "Typical failures: no_coverage (jurisdiction not in list_jurisdictions), empty_corpus, upstream_timeout. " +
@@ -37,14 +41,14 @@ export const TOOL_COPY = {
     PUBLIC_TIER,
 
   get_atom:
-    "Retrieve one catalog atom by DID (code-section or property-chain types: zoning-fact, setback-rule, buildable-envelope, parcel-node) with full provenance. " +
+    `Retrieve one catalog atom by DID (code-section or parcel-keyed property types: ${PARCEL_KEYED_TYPE_LIST}) with full provenance. ` +
     "Optional include_composition traverses atom-link children (definitions, cross-refs). " +
     "Per-atom accessPolicy enforced post-fetch; optional X-Hauska-Key for public-paid visibility. " +
     PUBLIC_TIER,
 
   get_property_atom_chain:
-    "Retrieve the property reasoning-chain for a parcel: zoning-fact, setback-rule, and buildable-envelope atoms with stable DIDs. " +
-    "Input parcel_node_id (county_fips:prop_id, e.g. 48209:156346) OR any chain atom_did — returns the same three slots. " +
+    `Retrieve the property atom chain for a parcel: ${PARCEL_KEYED_TYPE_LIST} with stable DIDs. ` +
+    "Input parcel_node_id (county_fips:prop_id, e.g. 48209:156346) OR any parcel-keyed atom_did — returns the derived parcel-keyed slots. " +
     "Catalog-tool path: each atom filtered by its own accessPolicy (anonymous sees public-free only; public-paid envelope requires X-Hauska-Key with paid entitlement). " +
     "Honest atom_path_pending when PROPERTY_ATOM_PATH corpus rows are absent — never fabricates values. " +
     "Does not alter the reporting/map package path. " +

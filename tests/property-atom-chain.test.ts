@@ -13,13 +13,22 @@ import {
   PARCEL_KEYED_PROPERTY_ENTITY_TYPES,
   chainStatusNote,
   parcelNodeIdFromAtomDid,
+  parsePropertyAtomDid,
   propertyChainAtomDid,
   resolvePropertyAtomChain,
   upstreamAtomsFromEngineWire,
 } from "../src/property-atom-chain.js";
 import type { AccessSubject } from "../src/access-policy.js";
+import { TOOL_COPY } from "../src/tool-copy.js";
 import { registerTools } from "../src/tools.js";
 import { toolGateMetadata } from "../src/mcp-introspection.js";
+
+const RETIRED_FOUR_TYPE_PRODUCT_SET = [
+  "parcel-node",
+  "zoning-fact",
+  "setback-rule",
+  "buildable-envelope",
+];
 
 const PARCEL = "48209:156346";
 
@@ -98,14 +107,35 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-test("propertyChainAtomDid and parcelNodeIdFromAtomDid round-trip", () => {
-  const did = propertyChainAtomDid(PARCEL, "zoning-fact");
-  assert.equal(did, "did:hauska:zoning-fact:48209:156346");
-  assert.equal(parcelNodeIdFromAtomDid(did), PARCEL);
-  assert.equal(
-    parcelNodeIdFromAtomDid(propertyChainAtomDid(PARCEL, "buildable-envelope")),
-    PARCEL,
+test("propertyChainAtomDid round-trips every derived parcel-keyed type", () => {
+  assert.notDeepEqual(
+    [...PARCEL_KEYED_PROPERTY_ENTITY_TYPES].sort(),
+    [...RETIRED_FOUR_TYPE_PRODUCT_SET].sort(),
+    "chain must not collapse to the retired four-type product set",
   );
+  for (const entityType of PARCEL_KEYED_PROPERTY_ENTITY_TYPES) {
+    const did = propertyChainAtomDid(PARCEL, entityType);
+    assert.equal(did, `did:hauska:${entityType}:${PARCEL}`);
+    assert.equal(parcelNodeIdFromAtomDid(did), PARCEL);
+    const parsed = parsePropertyAtomDid(did);
+    assert.ok(parsed, `structural parse must accept ${entityType}`);
+    assert.equal(parsed!.entityType, entityType);
+  }
+  assert.equal(parsePropertyAtomDid("did:hauska:road-node:48021:33512"), null);
+  assert.equal(
+    parsePropertyAtomDid("did:hauska:not-a-real-type:48209:156346"),
+    null,
+  );
+});
+
+test("tool copy lists derived parcel-keyed types, not the retired four-type product set", () => {
+  const derivedList = PARCEL_KEYED_PROPERTY_ENTITY_TYPES.join(", ");
+  assert.match(TOOL_COPY.get_atom, new RegExp(derivedList.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(
+    TOOL_COPY.get_property_atom_chain,
+    new RegExp(derivedList.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+  );
+  assert.doesNotMatch(TOOL_COPY.get_property_atom_chain, /the same three slots/);
 });
 
 test("anonymous caller sees public-free zoning only; envelope withheld", async () => {

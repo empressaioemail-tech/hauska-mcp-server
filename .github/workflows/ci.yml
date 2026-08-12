@@ -74,3 +74,17 @@ jobs:
               sys.exit(1)
           print("ci-deny-as-no-atom-found OK")
           PY
+
+  ci-hardcoded-did-type-union:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Fail leftover DID type-union regexes
+        run: |
+          # Exact SWEEP pattern: did:hauska:\(\?:  in src/**
+          if grep -R -n -E 'did:hauska:\(\?:' src; then
+            echo "ci-hardcoded-did-type-union FAIL: leftover did:hauska:(?: type union in src/"
+            exit 1
+          fi
+          echo "ci-hardcoded-did-type-union OK"

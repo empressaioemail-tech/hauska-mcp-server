@@ -118,6 +118,7 @@ import {
 } from "./request-context.js";
 import {
   PropertyAtomChainInputError,
+  PARCEL_KEYED_PROPERTY_ENTITY_TYPES,
   PARCEL_NODE_ID_REGEX,
   chainStatusNote,
   readableChainAtoms,
@@ -540,7 +541,8 @@ export function registerTools(server: McpServer) {
 
   // -----------------------------------------------------------------
   // Tool 2b: get_property_atom_chain
-  // Catalog path for property zoning-fact -> setback-rule -> envelope chain.
+  // Catalog path for all parcel-keyed property entity types (derived from
+  // PARCEL_KEYED_PROPERTY_ENTITY_TYPES / engine PROPERTY_ENTITY_TYPES minus road-node).
   // WDLL 3.13(a): per-atom accessPolicy, not package/tier path.
   // -----------------------------------------------------------------
   server.tool(
@@ -559,7 +561,7 @@ export function registerTools(server: McpServer) {
         .regex(ATOM_DID_REGEX, "atom_did must be a Hauska DID")
         .optional()
         .describe(
-          "Any parcel-keyed property atom DID (engine PROPERTY_ENTITY_TYPES except road-node). Provide this OR parcel_node_id.",
+          `Any parcel-keyed property atom DID (${PARCEL_KEYED_PROPERTY_ENTITY_TYPES.join(", ")}). Provide this OR parcel_node_id.`,
         ),
     },
     async ({ parcel_node_id, atom_did }) => {
