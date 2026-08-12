@@ -91,6 +91,24 @@ test("probeRateLimitStore reports degraded when runtime is on memory fallback", 
         const r = await probeRateLimitStore();
         assert.equal(r.state, "degraded");
         assert.match(r.detail ?? "", /memory fallback/i);
+        assert.equal(r.memory_fallback, true);
+        assert.equal(r.outage_policy, "fail-degraded");
+        assert.equal(r.primary, "memory");
+      },
+    );
+  });
+});
+
+test("probeRateLimitStore never reports ok while memoryFallback is true even if primary is postgres", async () => {
+  await withEnv({ HAUSKA_DEV_MODE: undefined }, async () => {
+    await withRuntime(
+      { primaryKind: "postgres", memoryFallback: true },
+      async () => {
+        const r = await probeRateLimitStore();
+        assert.equal(r.state, "degraded");
+        assert.equal(r.memory_fallback, true);
+        assert.equal(r.primary, "postgres");
+        assert.equal(r.outage_policy, "fail-degraded");
       },
     );
   });

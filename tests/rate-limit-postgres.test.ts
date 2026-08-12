@@ -34,6 +34,21 @@ test("PostgresRateLimitStore incrWithTtl uses atomic upsert SQL", async () => {
   assert.deepEqual(pool.lastArgs.slice(0, 2), ["rl:rpm:ip:1.2.3.4:123", 60]);
 });
 
+test("resolveRateLimitStoreKind honors explicit postgres pin", () => {
+  const prevEnv = process.env.HAUSKA_ENV;
+  const prevStore = process.env.HAUSKA_RATE_LIMIT_STORE;
+  process.env.HAUSKA_ENV = "development";
+  process.env.HAUSKA_RATE_LIMIT_STORE = "postgres";
+  try {
+    assert.equal(resolveRateLimitStoreKind(), "postgres");
+  } finally {
+    if (prevEnv === undefined) delete process.env.HAUSKA_ENV;
+    else process.env.HAUSKA_ENV = prevEnv;
+    if (prevStore === undefined) delete process.env.HAUSKA_RATE_LIMIT_STORE;
+    else process.env.HAUSKA_RATE_LIMIT_STORE = prevStore;
+  }
+});
+
 test("resolveRateLimitStoreKind defaults to postgres in production", () => {
   const prevEnv = process.env.HAUSKA_ENV;
   const prevStore = process.env.HAUSKA_RATE_LIMIT_STORE;
