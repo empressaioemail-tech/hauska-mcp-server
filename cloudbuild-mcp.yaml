@@ -78,6 +78,12 @@ steps:
       # Circle secrets: Nick seeds real values in hauska-prod-497015; until then
       # placeholder "absent" versions keep bindings valid and runtime logs
       # sdk_metering_circle_absent (overage / RevenueRouter PARTIAL).
+      #
+      # P-35 retrieval-key durability: HAUSKA_ENGINE_API_KEY is the SAME Secret
+      # Manager value retrieval-api mounts as RETRIEVAL_API_KEY (and PE syncs to
+      # Vercel as HAUSKA_RETRIEVAL_API_KEY + RETRIEVAL_API_KEY). Do not replace
+      # with a plaintext env var. :latest re-resolves at each deploy (trap 5).
+      # hauska-client.ts sends it as Bearer to HAUSKA_BACKEND_URL.
       - --set-secrets=HAUSKA_ENGINE_API_KEY=HAUSKA_ENGINE_API_KEY:latest,LEGACY_BACKEND_API_KEY=LEGACY_BACKEND_API_KEY:latest,LEGACY_SNAPSHOT_SECRET=LEGACY_SNAPSHOT_SECRET:latest,DATABASE_URL=DATABASE_URL:latest,UPSTASH_REDIS_REST_URL=UPSTASH_REDIS_REST_URL:latest,UPSTASH_REDIS_REST_TOKEN=UPSTASH_REDIS_REST_TOKEN:latest,HAUSKA_ADMIN_BOOTSTRAP_KEY=HAUSKA_ADMIN_BOOTSTRAP_KEY:latest,GATE_CONTEXT_SIGNING_KEY=GATE_CONTEXT_SIGNING_KEY:latest,CIRCLE_API_KEY=CIRCLE_API_KEY:latest,CIRCLE_MERCHANT_WALLET_ID=CIRCLE_MERCHANT_WALLET_ID:latest,HAUSKA_CHECKOUT_BASE_URL=HAUSKA_CHECKOUT_BASE_URL:latest,CIRCLE_API_URL=CIRCLE_API_URL:latest
 
 images:
