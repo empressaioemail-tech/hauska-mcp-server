@@ -13,6 +13,7 @@ import { getPool } from "./db.js";
 import { metrics, type MetricsSnapshot } from "./metrics.js";
 import {
   getRateLimitRuntimeState,
+  RATE_LIMIT_OUTAGE_POLICY,
   resolveRateLimitStoreKind,
 } from "./rate-limit.js";
 
@@ -29,6 +30,11 @@ export interface DepHealth {
   state: DepState;
   latency_ms: number | null;
   detail?: string;
+  // Present on rate_limit_store only. Makes the outage mode a probeable
+  // field so a memory fallback cannot report state=ok.
+  primary?: "postgres" | "upstash" | "memory";
+  memory_fallback?: boolean;
+  outage_policy?: "fail-degraded";
 }
 
 export interface HealthReport {
@@ -121,6 +127,9 @@ export async function probeRateLimitStore(): Promise<DepHealth> {
       latency_ms: null,
       detail:
         "degraded — rate-limit on per-instance memory fallback (not shared across instances)",
+      primary: runtime.primaryKind,
+      memory_fallback: true,
+      outage_policy: RATE_LIMIT_OUTAGE_POLICY,
     };
   }
 
@@ -128,12 +137,22 @@ export async function probeRateLimitStore(): Promise<DepHealth> {
     const started = Date.now();
     try {
       await getPool().query("SELECT 1 FROM rate_limit_counters LIMIT 0");
-      return { state: "ok", latency_ms: Date.now() - started, detail: "postgres" };
+      return {
+        state: "ok",
+        latency_ms: Date.now() - started,
+        detail: "postgres",
+        primary: "postgres",
+        memory_fallback: false,
+        outage_policy: RATE_LIMIT_OUTAGE_POLICY,
+      };
     } catch (err) {
       return {
         state: "degraded",
         latency_ms: Date.now() - started,
         detail: `postgres rate_limit_counters probe failed: ${String(err).slice(0, 120)}`,
+        primary: "postgres",
+        memory_fallback: false,
+        outage_policy: RATE_LIMIT_OUTAGE_POLICY,
       };
     }
   }
@@ -146,9 +165,18 @@ export async function probeRateLimitStore(): Promise<DepHealth> {
       state: "degraded",
       latency_ms: null,
       detail: "degraded — upstash adapter selected but not configured",
+      primary: "upstash",
+      memory_fallback: false,
+      outage_policy: RATE_LIMIT_OUTAGE_POLICY,
     };
   }
-  return probeHttp(`${url}/ping`, { authorization: `Bearer ${token}` });
+  const ping = await probeHttp(`${url}/ping`, { authorization: `Bearer ${token}` });
+  return {
+    ...ping,
+    primary: "upstash",
+    memory_fallback: false,
+    outage_policy: RATE_LIMIT_OUTAGE_POLICY,
+  };
 }
 
 /** @deprecated Use probeRateLimitStore. Kept for transitional imports in tests. */

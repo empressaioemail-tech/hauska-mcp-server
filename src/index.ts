@@ -24,7 +24,9 @@ import { metrics } from "./metrics.js";
 import { isProduct, type Product } from "./products.js";
 import {
   buildPrimaryRateLimitStore,
+  getRateLimitRuntimeState,
   MemoryRateLimitStore,
+  RATE_LIMIT_OUTAGE_POLICY,
   ResilientRateLimitStore,
   resolveRateLimitStoreKind,
   setRateLimitRuntimeState,
@@ -243,6 +245,10 @@ async function main() {
       setRateLimitRuntimeState({ primaryKind: "memory", memoryFallback: true });
     }
     rateLimitStore = new ResilientRateLimitStore(primaryStore, logger);
+    logger.info("rate_limit_store_ready", {
+      ...getRateLimitRuntimeState(),
+      outage_policy: RATE_LIMIT_OUTAGE_POLICY,
+    });
     authMiddleware = buildAuthMiddleware(rateLimitStore);
   }
 

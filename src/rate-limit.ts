@@ -112,6 +112,11 @@ export class PostgresRateLimitStore implements RateLimitStore {
 
 export type RateLimitPrimaryKind = "postgres" | "upstash" | "memory";
 
+// Documented outage mode (L13 / P-29). Store outage never 503s the
+// public gate; it fail-degrades to per-instance memory and MUST surface
+// on /health as state=degraded. Silent skip is the defect class.
+export const RATE_LIMIT_OUTAGE_POLICY = "fail-degraded" as const;
+
 export interface RateLimitRuntimeState {
   primaryKind: RateLimitPrimaryKind;
   memoryFallback: boolean;
@@ -161,7 +166,9 @@ export function buildPrimaryRateLimitStore(): RateLimitStore {
 // Wraps a primary store (typically Postgres) and automatically falls
 // back to a MemoryRateLimitStore when the primary fails. Retries the
 // primary no more than once every 60s. Never throws; always returns
-// a decision (fail-degraded, not fail-closed).
+// a decision (fail-degraded, not fail-closed). The fallback is a
+// degraded mode, not a silent one: setRateLimitRuntimeState flips
+// memoryFallback so /health reports state=degraded.
 // -----------------------------------------------------------------
 
 export class ResilientRateLimitStore implements RateLimitStore {
