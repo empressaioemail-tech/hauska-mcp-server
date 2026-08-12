@@ -1,4 +1,4 @@
-﻿// Cross-repo drift guard: MCP parcel-keyed types must match engine PROPERTY_ENTITY_TYPES.
+// Cross-repo drift guard: MCP parcel-keyed types must match engine PROPERTY_ENTITY_TYPES.
 
 import { strict as assert } from "node:assert";
 import { existsSync, readFileSync } from "node:fs";

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Property entity types derived from hauska-engine `PROPERTY_ENTITY_TYPES`.
  * Runtime uses a committed mirror; tests prove parity against the engine source file.
  */
@@ -52,7 +52,7 @@ export function deriveParcelKeyedPropertyEntityTypes(
 
 /**
  * Committed mirror of engine `PROPERTY_ENTITY_TYPES` (2026-08-12).
- * Cross-repo test fails if engine list diverges — update via engine truth, not hand-extend.
+ * Cross-repo test fails if engine list diverges - update via engine truth, not hand-extend.
  */
 export const ENGINE_PROPERTY_ENTITY_TYPES_MIRROR: readonly string[] = [
   "parcel-node",

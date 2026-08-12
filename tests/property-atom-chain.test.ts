@@ -1,4 +1,4 @@
-﻿// Phase 1c property atom chain â€” accessPolicy + honest pending state.
+// Phase 1c property atom chain - accessPolicy + honest pending state.
 
 import { strict as assert } from "node:assert";
 import { afterEach, beforeEach, test } from "node:test";

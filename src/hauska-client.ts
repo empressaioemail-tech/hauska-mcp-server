@@ -1,4 +1,4 @@
-﻿// Hauska Client.
+// Hauska Client.
 //
 // HTTP client against the `hauska-engine` retrieval API (Sync 3 contract).
 // Wraps five locked endpoints exposed by `services/retrieval-api/src/server.ts`
@@ -37,7 +37,7 @@ function engineApiKey(): string {
 }
 
 // -----------------------------------------------------------------
-// Wire types â€” mirrored from `hauska-engine` storage and atom packages.
+// Wire types - mirrored from `hauska-engine` storage and atom packages.
 // -----------------------------------------------------------------
 
 export type CodeAtomEntityType =
@@ -169,7 +169,7 @@ export interface JurisdictionStatusSnapshot {
    * ADR-017 access tier propagated from the jurisdiction-corpus atom
    * (`@hauska/atom-contract@^1.1.0`). The substrate-MCP filter on
    * `list_jurisdictions` uses this to hide partnership-pending
-   * jurisdictions from unauthenticated callers. Absent on the wire â‡’
+   * jurisdictions from unauthenticated callers. Absent on the wire =>
    * treat as `"public-free"` (the engine docstring says the same).
    */
   accessPolicy?: AccessPolicy;
@@ -185,7 +185,7 @@ export interface QueryJurisdictionResponse {
 }
 
 // -----------------------------------------------------------------
-// Error type â€” surfaced to tool handlers so they can choose between
+// Error type - surfaced to tool handlers so they can choose between
 // "engine reachable, atom missing" (404) and "engine unreachable / 5xx"
 // (operator-actionable).
 // -----------------------------------------------------------------
@@ -360,7 +360,7 @@ export const hauskaClient = {
 
   /**
    * Property-node reasoning chain (Phase 1c). Returns null on 404 when the
-   * retrieval-api route is not yet deployed â€” callers fall back to per-DID fetch.
+   * retrieval-api route is not yet deployed - callers fall back to per-DID fetch.
    */
   async getPropertyAtomChain(params: {
     parcelNodeId: string;

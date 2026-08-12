@@ -1,4 +1,4 @@
-﻿// Property-node reasoning-chain catalog resolution (Phase 1c).
+// Property-node reasoning-chain catalog resolution (Phase 1c).
 //
 // Serves all parcel-keyed property entity types (derived from engine
 // PROPERTY_ENTITY_TYPES minus road-node) via the CATALOG-TOOL path
@@ -44,7 +44,7 @@ export const PROPERTY_CHAIN_SLOT_TYPES = LEGACY_REASONING_CHAIN_SLOTS;
 
 export type PropertyChainSlot = LegacyReasoningChainSlot;
 
-/** G6 canonical id shape — must match PE `PARCEL_NODE_ID_SOURCE` (F1b). */
+/** G6 canonical id shape - must match PE `PARCEL_NODE_ID_SOURCE` (F1b). */
 export const PARCEL_NODE_ID_SOURCE = String.raw`^\d{5}:[^/\s]+$`;
 export const PARCEL_NODE_ID_REGEX = new RegExp(PARCEL_NODE_ID_SOURCE);
 
@@ -377,12 +377,19 @@ export async function resolvePropertyAtomChain(
 
   const slots = {} as Record<PropertyChainEntityType, PropertyChainAtomSlot>;
   for (const entityType of PARCEL_KEYED_PROPERTY_ENTITY_TYPES) {
-    const atomDid = propertyChainAtomDid(parcelNodeId, entityType);
     const raw = upstream[entityType];
     if (!raw) {
       slots[entityType] = emptySlot(entityType, parcelNodeId);
       continue;
     }
+    // Prefer the stored DID / entityId - owner/land-use/cad-roll (and
+    // similar) append taxYear or other suffixes; bare parcel DID is wrong.
+    const atomDid =
+      typeof raw.atomDid === "string" && raw.atomDid.startsWith("did:hauska:")
+        ? raw.atomDid
+        : typeof raw.entityId === "string" && raw.entityId.length > 0
+          ? `did:hauska:${entityType}:${raw.entityId}`
+          : propertyChainAtomDid(parcelNodeId, entityType);
     slots[entityType] = applyAccessPolicyToAtom(
       subject,
       tool,
@@ -409,7 +416,7 @@ export function chainStatusNote(data: PropertyAtomChainData): string | undefined
     case "atom_path_pending":
       return (
         "PROPERTY_ATOM_PATH atoms are not in the retrieval corpus for this parcel yet. " +
-        "Status atom_path_pending — no values fabricated."
+        "Status atom_path_pending - no values fabricated."
       );
     case "partial":
       if (data.withheldSlots.length > 0 && data.pendingSlots.length > 0) {
