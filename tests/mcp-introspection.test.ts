@@ -13,6 +13,10 @@ import {
   listIntrospectionTools,
   toolGateMetadata,
 } from "../src/mcp-introspection.js";
+import {
+  cataloguedToolNames,
+  PUBLIC_CATALOG_TOOLS,
+} from "../src/product-gates.js";
 import { MemoryRateLimitStore } from "../src/rate-limit.js";
 
 test("toolGateMetadata classifies public, reporting, codex, map", () => {
@@ -34,9 +38,23 @@ test("listIntrospectionTools returns wire-accurate catalog", async () => {
   assert.ok(catalog.tools.some((t) => t.name === "refresh_parcel_terrain_export"));
   assert.ok(catalog.tools.some((t) => t.name === "refresh_parcel_site_plan_export"));
   assert.ok(catalog.tools.some((t) => t.name === "refresh_parcel_dossier_export"));
-  assert.equal(
-    catalog.tools.filter((t) => t.gate === "access_policy").length,
-    10,
+  const accessPolicyNames = catalog.tools
+    .filter((t) => t.gate === "access_policy")
+    .map((t) => t.name)
+    .sort();
+  assert.deepEqual(
+    accessPolicyNames,
+    [...PUBLIC_CATALOG_TOOLS].sort(),
+    "access_policy gate set must equal PUBLIC_CATALOG_TOOLS (not a magic count)",
+  );
+  const remainder = catalog.tools
+    .map((t) => t.name)
+    .filter((name) => !cataloguedToolNames().has(name))
+    .sort();
+  assert.deepEqual(
+    remainder,
+    [],
+    `server.tool names missing from PUBLIC∪CODEX∪MAP∪REPORTING: ${remainder.join(", ")}`,
   );
   assert.equal(
     catalog.by_product.public,

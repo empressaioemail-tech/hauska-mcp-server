@@ -1,4 +1,4 @@
-// Bridge from MCP read envelopes to @hauska/atom-contract read-contract (F4).
+// Bridge from MCP read envelopes to @empressaio/atom-contract read-contract (F4).
 
 import {
   createConsequenceAxis,
@@ -7,7 +7,7 @@ import {
   type ModelAttributionStamp,
   type ReadContract,
   READ_CONTRACT_SCHEMA,
-} from "@hauska/atom-contract/read-contract";
+} from "@empressaio/atom-contract/read-contract";
 
 export type ReadContractKind =
   | "catalog"

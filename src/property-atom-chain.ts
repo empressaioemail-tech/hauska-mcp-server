@@ -4,7 +4,7 @@
 // PROPERTY_ENTITY_TYPES minus road-node) via the CATALOG-TOOL path
 // (per-atom accessPolicy post-fetch), not the map/reporting package tier path.
 
-import type { AccessPolicy } from "@hauska/atom-contract";
+import type { AccessPolicy } from "@empressaio/atom-contract";
 
 import {
   canReadAccessTarget,

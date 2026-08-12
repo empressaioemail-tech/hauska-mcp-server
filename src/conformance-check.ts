@@ -1,12 +1,12 @@
-// Read-tool conformance against @hauska/atom-contract/conformance (1.5.0).
+// Read-tool conformance against @empressaio/atom-contract/conformance (1.5.0).
 
 import {
   ATOM_CONFORMANCE_TARGET_VERSION,
   validateAtomConformance,
   type AtomConformanceValidationResult,
-} from "@hauska/atom-contract/conformance";
-import type { AccessPolicy } from "@hauska/atom-contract";
-import type { ReadContract } from "@hauska/atom-contract/read-contract";
+} from "@empressaio/atom-contract/conformance";
+import type { AccessPolicy } from "@empressaio/atom-contract";
+import type { ReadContract } from "@empressaio/atom-contract/read-contract";
 
 import { logger } from "./logger.js";
 

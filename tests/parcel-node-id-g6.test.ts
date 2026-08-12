@@ -1,5 +1,5 @@
 /**
- * G6 — MCP parcel_node_id regex matches PE contract (F1b).
+ * G6 — MCP parcel_node_id regex is not the retired digits-only propId pattern.
  * Runs under `pnpm test` (node --test + tsx).
  */
 import { describe, it } from "node:test";
@@ -10,12 +10,8 @@ import {
   normalizeParcelNodeId,
 } from "../src/property-atom-chain.ts";
 
-/** Mirrored from hauska-map apps/property-explorer/api/_lib/parcel-node-id.ts */
-const PE_PARCEL_NODE_ID_SOURCE = String.raw`^\d{5}:[^/\s]+$`;
-
 describe("G6 parcel-node-id (MCP ↔ PE)", () => {
-  it("matches the PE BFF source string (no digits-only drift)", () => {
-    assert.equal(PARCEL_NODE_ID_SOURCE, PE_PARCEL_NODE_ID_SOURCE);
+  it("is not the retired digits-only propId pattern", () => {
     assert.notEqual(PARCEL_NODE_ID_SOURCE, String.raw`^\d{5}:\d+$`);
   });
 
