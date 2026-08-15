@@ -99,8 +99,11 @@ jobs:
           python3 - <<'PY'
           import re, sys
           from pathlib import Path
-          tools_src = Path("src/tools.ts").read_text(encoding="utf-8")
-          registered = re.findall(r'server\.tool\(\s*"([^"]+)"', tools_src)
+          registered: list[str] = []
+          for p in Path("src").rglob("*.ts"):
+              registered.extend(
+                  re.findall(r'server\.tool\(\s*"([^"]+)"', p.read_text(encoding="utf-8"))
+              )
           if not registered:
               print("ci-gate-map-vs-server-tool FAIL: no server.tool first-arg names extracted")
               sys.exit(1)
