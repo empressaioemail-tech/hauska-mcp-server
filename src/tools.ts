@@ -97,6 +97,7 @@ import {
 } from "./compose-workspace.js";
 import { logger } from "./logger.js";
 import type { Product } from "./products.js";
+import { registerSmartFilesTools } from "./smart-files-tools.js";
 import {
   canReadAccessTarget,
   effectiveAccessPolicy,
@@ -5612,4 +5613,6 @@ export function registerTools(server: McpServer) {
       }
     },
   );
+
+  registerSmartFilesTools(server);
 }

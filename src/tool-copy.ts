@@ -211,4 +211,23 @@ export const TOOL_COPY = {
     "Calibration-overlay read-contract-per-atom: widthed read-contract with overlay-adjusted confidence when engine overlay row exists. " +
     "Requires reporting product key. Falls back to catalog read-contract when overlay route is not yet deployed. " +
     REPORTING_TIER,
+
+  list_smart_file_folders:
+    "List data-room folders for a scope (jurisdiction, tenant, or site). Folders are twin nodes; file membership is via placed-on edges, never entityId reconstruction. " +
+    "Requires reporting API key with platform-internal for seeded room. Typed absence when scope has no folders. " +
+    REPORTING_TIER,
+
+  list_smart_file_folder_files:
+    "List file-shaped smart-file documents in a folder via smart_file_placements (target_type=folder). Non-file atoms are excluded — use the CC record pane. " +
+    "Counting rule: DISTINCT document rows joined from placements. Requires reporting API key. " +
+    REPORTING_TIER,
+
+  read_smart_file:
+    "Read a smart-file document by declared entityId (smartfile:scopeType:scopeId:docSlug). Returns typed held or absence union plus version metadata and attachment path. " +
+    "accessPolicy enforced at gate. PDF travels with the atom via attachment sub-route. " +
+    REPORTING_TIER,
+
+  list_smart_file_placements:
+    "List placed-on edges for a smart-file document entityId. Same entityId may appear in multiple folders. Requires reporting API key. " +
+    REPORTING_TIER,
 } as const;
