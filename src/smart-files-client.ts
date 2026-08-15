@@ -1,5 +1,6 @@
 /**
- * Smart Files HTTP client — cortex-api /api/smart-files/* (G-56).
+ * Smart Files HTTP client — files service /api/smart-files/* (G-58).
+ * Does not use LEGACY_BACKEND_URL. Refuses cortex-api.
  */
 
 import {
@@ -7,24 +8,33 @@ import {
   LegacyUnreachableError,
 } from "./legacy-client.js";
 
-const DEFAULT_BACKEND_URL = "http://localhost:5000";
+const DEFAULT_BACKEND_URL = "http://localhost:8080";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-function backendUrl(): string {
-  return process.env.LEGACY_BACKEND_URL ?? DEFAULT_BACKEND_URL;
+export function smartFilesBackendUrl(): string {
+  const url = (process.env.SMART_FILES_BACKEND_URL ?? DEFAULT_BACKEND_URL).replace(
+    /\/$/,
+    "",
+  );
+  if (/cortex-api/i.test(url)) {
+    throw new Error(
+      "SMART_FILES_BACKEND_URL refuses cortex-api; Smart Files is its own service",
+    );
+  }
+  return url;
 }
 
-function legacyApiKey(): string {
-  return process.env.LEGACY_BACKEND_API_KEY ?? "";
+function serviceToken(): string {
+  return process.env.SMART_FILES_API_KEY ?? "";
 }
 
 async function smartFilesFetch<T>(path: string): Promise<T> {
-  const url = `${backendUrl()}${path}`;
+  const url = `${smartFilesBackendUrl()}${path}`;
   const headers: Record<string, string> = {
     accept: "application/json",
     "user-agent": "hauska-mcp-server/0.1",
   };
-  const apiKey = legacyApiKey();
+  const apiKey = serviceToken();
   if (apiKey) headers.authorization = `Bearer ${apiKey}`;
 
   const controller = new AbortController();
