@@ -116,6 +116,65 @@ test("tenant-shared: shared-with list grants cross-tenant read", () => {
   assert.equal(canReadAccessTarget(tenantB, target), true);
 });
 
+test("ICC public-free is withheld from anonymous and free catalog callers", () => {
+  const icc = {
+    accessPolicy: "public-free" as const,
+    jurisdictionTenant: "icc-model-code",
+  };
+  assert.equal(canReadAccessTarget(anonymous, icc), false);
+  assert.equal(
+    canReadAccessTarget({ ...anonymous, tier: "free" }, icc),
+    false,
+  );
+  assert.equal(canReadAccessTarget(tenantA, icc), true);
+  assert.equal(canReadAccessTarget(hauskaInternal, icc), true);
+});
+
+test("ICC sourceAdapter withhold does not depend on tenant string", () => {
+  const icc = {
+    accessPolicy: "public-free" as const,
+    jurisdictionTenant: "unknown",
+    sourceAdapter: "icc-code-connect",
+  };
+  assert.equal(canReadAccessTarget(anonymous, icc), false);
+  assert.equal(canReadAccessTarget(tenantA, icc), true);
+});
+
+test("non-ICC public-free stays readable to anonymous", () => {
+  assert.equal(
+    canReadAccessTarget(anonymous, {
+      accessPolicy: "public-free",
+      jurisdictionTenant: "bastrop-tx",
+    }),
+    true,
+  );
+});
+
+test("filterByAccessPolicy drops ICC from anonymous list_jurisdictions", () => {
+  const rows = [
+    {
+      id: "bastrop",
+      accessPolicy: "public-free" as const,
+      jurisdictionTenant: "bastrop-tx",
+    },
+    {
+      id: "icc",
+      accessPolicy: "public-free" as const,
+      jurisdictionTenant: "icc-model-code",
+    },
+  ];
+  const kept = filterByAccessPolicy(
+    rows,
+    anonymous,
+    (r) => ({
+      accessPolicy: r.accessPolicy,
+      jurisdictionTenant: r.jurisdictionTenant,
+    }),
+    { tool: "list_jurisdictions" },
+  );
+  assert.deepEqual(kept.map((r) => r.id), ["bastrop"]);
+});
+
 test("filterByAccessPolicy drops tenant-B-invisible rows", () => {
   const rows = [
     {

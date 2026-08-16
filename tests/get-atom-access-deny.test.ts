@@ -12,6 +12,7 @@ import { requestContext } from "../src/request-context.js";
 import { registerTools } from "../src/tools.js";
 
 const DID = "did:hauska:owner-fact:48021:27303";
+const ICC_DID = "did:hauska:code-section:icc-model-code/IBC2018P6/R311.7";
 
 const realFetch = globalThis.fetch;
 let mockAtom: unknown = null;
@@ -44,7 +45,7 @@ function paidCtx(): AuthContext {
   };
 }
 
-async function callGetAtom(ctx: AuthContext) {
+async function callGetAtom(ctx: AuthContext, atomId = DID) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = new McpServer({ name: "test", version: "0.0.0" });
   registerTools(server);
@@ -54,7 +55,7 @@ async function callGetAtom(ctx: AuthContext) {
   const result = await requestContext.run(ctx, () =>
     client.callTool({
       name: "get_atom",
-      arguments: { atom_id: DID },
+      arguments: { atom_id: atomId },
     }),
   );
   await client.close();
@@ -135,4 +136,42 @@ test("paid caller receives public-paid atom", async () => {
   assert.notEqual(result.isError, true);
   assert.doesNotMatch(text, /No atom found at DID/);
   assert.match(text, /owner-fact/);
+});
+
+test("G-60: anon get_atom on ICC public-free holds the body (not a corpus miss)", async () => {
+  mockAtom = {
+    entityType: "code-section",
+    entityId: "IBC2018P6/R311.7",
+    atomDid: "did:hauska:code-section:icc-model-code/IBC2018P6/R311.7",
+    jurisdictionTenant: "icc-model-code",
+    fetchedAt: "2026-08-16T00:00:00.000Z",
+    sourceAdapter: "icc-code-connect",
+    sourceUrl: "https://codes.iccsafe.org/content/IBC2018P6/R311.7",
+    contentHash: "icc-fixture",
+    accessPolicy: "public-free",
+    bodyText: "VERBATIM ICC BODY MUST NOT LEAK",
+  };
+  const { result, text } = await callGetAtom(anonCtx(), ICC_DID);
+  assert.equal(result.isError, true);
+  assert.doesNotMatch(text, /No atom found at DID/);
+  assert.doesNotMatch(text, /VERBATIM ICC BODY MUST NOT LEAK/);
+  assert.match(text, /not readable|accessPolicy|access.denied|not-readable/i);
+});
+
+test("G-60: paid caller still reads ICC while store stamp lags", async () => {
+  mockAtom = {
+    entityType: "code-section",
+    entityId: "IBC2018P6/R311.7",
+    atomDid: "did:hauska:code-section:icc-model-code/IBC2018P6/R311.7",
+    jurisdictionTenant: "icc-model-code",
+    fetchedAt: "2026-08-16T00:00:00.000Z",
+    sourceAdapter: "icc-code-connect",
+    sourceUrl: "https://codes.iccsafe.org/content/IBC2018P6/R311.7",
+    contentHash: "icc-fixture",
+    accessPolicy: "public-free",
+    bodyText: "VERBATIM ICC BODY KEYED PATH",
+  };
+  const { result, text } = await callGetAtom(paidCtx(), ICC_DID);
+  assert.notEqual(result.isError, true);
+  assert.match(text, /code-section/);
 });

@@ -273,6 +273,8 @@ function atomInstanceAccessTarget(
     accessPolicy,
     jurisdictionTenant: atom.jurisdictionTenant,
     sharedWithTenants: readSharedWithTenants(atom),
+    sourceAdapter:
+      typeof atom.sourceAdapter === "string" ? atom.sourceAdapter : undefined,
   };
 }
 
@@ -442,6 +444,10 @@ export function registerTools(server: McpServer) {
           (r) => ({
             accessPolicy: r.accessPolicy,
             jurisdictionTenant: r.jurisdictionTenant,
+            sourceAdapter:
+              typeof (r as { sourceAdapter?: unknown }).sourceAdapter === "string"
+                ? (r as { sourceAdapter: string }).sourceAdapter
+                : undefined,
           }),
           { tool: "search_atoms" },
         );
