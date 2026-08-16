@@ -29,6 +29,24 @@ export interface AccessTarget {
   accessPolicy?: EnforcedAccessPolicy;
   jurisdictionTenant: string;
   sharedWithTenants?: ReadonlyArray<string>;
+  sourceAdapter?: string;
+}
+
+/** ICC catalog tenant. Store rows may still say public-free until L26 releases the atoms slot (G-60 A-028). */
+export const ICC_JURISDICTION_TENANT = "icc-model-code";
+export const ICC_SOURCE_ADAPTER = "icc-code-connect";
+
+export function isIccCatalogTarget(target: AccessTarget): boolean {
+  if (target.jurisdictionTenant === ICC_JURISDICTION_TENANT) return true;
+  if (target.sourceAdapter === ICC_SOURCE_ADAPTER) return true;
+  return false;
+}
+
+function isPublicCatalogCaller(subject: AccessSubject): boolean {
+  return (
+    !subject.platformInternal &&
+    (subject.tier === "free_anonymous" || subject.tier === "free")
+  );
 }
 
 export function accessSubjectFromContext(
@@ -63,6 +81,12 @@ export function canReadAccessTarget(
   subject: AccessSubject,
   target: AccessTarget,
 ): boolean {
+  // G-60 A-028: withhold ICC from the public catalog even when store
+  // accessPolicy is still public-free. Codex / paid keys still read until
+  // the bounded store UPDATE. Not a second atoms writer.
+  if (isIccCatalogTarget(target) && isPublicCatalogCaller(subject)) {
+    return false;
+  }
   const policy = effectiveAccessPolicy(target);
   switch (policy) {
     case "public-free":

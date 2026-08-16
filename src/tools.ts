@@ -273,6 +273,8 @@ function atomInstanceAccessTarget(
     accessPolicy,
     jurisdictionTenant: atom.jurisdictionTenant,
     sharedWithTenants: readSharedWithTenants(atom),
+    sourceAdapter:
+      typeof atom.sourceAdapter === "string" ? atom.sourceAdapter : undefined,
   };
 }
 
