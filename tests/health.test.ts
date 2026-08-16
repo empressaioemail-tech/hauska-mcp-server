@@ -6,13 +6,26 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { buildHealthReport, type DepHealth } from "../src/health.js";
+import { buildHealthReport, probeHttp, type DepHealth } from "../src/health.js";
 
 const okProbe = async (): Promise<DepHealth> => ({ state: "ok", latency_ms: 5 });
 const downProbe = async (): Promise<DepHealth> => ({
   state: "down",
   latency_ms: null,
   detail: "connection refused",
+});
+
+test("probeHttp treats HTTP 404 as degraded, not ok", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("not found", { status: 404 })) as typeof fetch;
+  try {
+    const r = await probeHttp("https://example.invalid/healthz");
+    assert.equal(r.state, "degraded");
+    assert.match(r.detail ?? "", /404 is not ok/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test("buildHealthReport reports ok when every dependency probe passes", async () => {

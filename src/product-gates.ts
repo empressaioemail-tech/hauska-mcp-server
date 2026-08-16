@@ -45,6 +45,9 @@ export const REPORTING_TOOLS = new Set([
   "list_smart_file_folder_files",
   "read_smart_file",
   "list_smart_file_placements",
+  "create_smart_file_folder",
+  "upload_smart_file",
+  "share_smart_file_folder",
   "resolve_place",
   "get_place_layers",
   "get_place_dossier",
@@ -103,12 +106,16 @@ export const CODEX_TOOLS = new Set([
   "codex_briefing_fetch",
   "codex_findings_fetch",
   "codex_snapshot_ingest",
+  "plan_review_get_letter",
+  "plan_review_get_code",
+  "plan_review_get_map_context",
+  "icc_activity_list",
 ]);
 
 /** Product required to invoke a gated tool (undefined = no product gate). */
 export function requiredProductForTool(tool: string): Product | undefined {
   if (PUBLIC_CATALOG_TOOLS.has(tool)) return undefined;
-  if (CODEX_TOOLS.has(tool)) return "codex";
+  if (CODEX_TOOLS.has(tool) || tool.startsWith("codex_") || tool.startsWith("plan_review_") || tool === "icc_activity_list") return "codex";
   if (MAP_TOOLS.has(tool)) return "map";
   if (REPORTING_TOOLS.has(tool)) return "reporting";
   if (tool.startsWith("codex_")) return "codex";

@@ -98,6 +98,7 @@ import {
 import { logger } from "./logger.js";
 import type { Product } from "./products.js";
 import { registerSmartFilesTools } from "./smart-files-tools.js";
+import { registerPlanReviewTools } from "./plan-review-tools.js";
 import {
   canReadAccessTarget,
   effectiveAccessPolicy,
@@ -2353,410 +2354,7 @@ export function registerTools(server: McpServer) {
     },
   );
 
-  // -----------------------------------------------------------------
-  // Codex tool 1: codex_finding_generation
-  // Kicks off engine full-pass mode against a submission. Returns the
-  // generationId so the agent can poll status, OR the in-flight job's
-  // generationId if a single-flight race lost.
-  // Wraps POST /api/submissions/:submissionId/findings/generate.
-  // Gate: product='codex' required.
-  // -----------------------------------------------------------------
-  server.tool(
-    "codex_finding_generation",
-    "Codex (plan review): kick off engine finding generation against an existing submission. " +
-      "Returns the generationId for status polling. If a finding-generation job is already in " +
-      "flight for the submission, returns that job's generationId with alreadyInFlight=true " +
-      "rather than starting a new one. " + CODEX_TIER,
-    {
-      submission_id: z
-        .string()
-        .uuid()
-        .describe(
-          "UUID of the submission to generate findings against. Required.",
-        ),
-    },
-    async ({ submission_id }) => {
-      const gate = await requireProduct("codex_finding_generation", "codex");
-      if (!gate.ok) return gate.content;
-      const tier = getCurrentTier();
-      try {
-        const response = await legacyClient.generateFindings({
-          submissionId: submission_id,
-        });
-        const __readEnv = codexEnvelope(
-            response,
-            codexProvenance({
-              atomKind: "finding-generation-run",
-              rowId: response.generationId,
-              jurisdictionTenant: "legacy",
-              sourcePath: `/api/submissions/${submission_id}/findings/generate`,
-            }),
-            { tier },
-          );
-        logToolRead({
-          tool: "codex_finding_generation",
-          submission_id,
-          tier,
-          generation_id: response.generationId,
-          already_in_flight: response.alreadyInFlight ?? false,
-        }, __readEnv.atoms);
-        return envelopeContent(__readEnv);
-      } catch (err) {
-        return errorContent(
-          describeLegacyFailure("codex_finding_generation", err),
-        );
-      }
-    },
-  );
-
-  // -----------------------------------------------------------------
-  // Codex tool 1b: codex_findings_fetch (P0a citation lineage)
-  // Returns persisted findings with citations[].atomId verbatim plus
-  // optional generation status (rail-quiet: no calibration grade fields).
-  // Tenant-scoped via ADR-005 Layer A (#29).
-  // -----------------------------------------------------------------
-  server.tool(
-    "codex_findings_fetch",
-    "Codex (plan review): fetch findings for a submission after generation. " +
-      "Returns data.findings[].citations with atom ids as stored on the server, " +
-      "plus envelope atoms for cited code-section DIDs. Optionally includes " +
-      "generation status (generationId, state, timestamps) without calibration " +
-      "grade fields. Chain after codex_finding_generation when polling for " +
-      "completed findings with citation lineage. " + CODEX_TIER,
-    {
-      submission_id: z
-        .string()
-        .uuid()
-        .describe("UUID of the submission to list findings for. Required."),
-      include_status: z
-        .boolean()
-        .optional()
-        .default(true)
-        .describe(
-          "When true (default), include rail-quiet generation status alongside findings.",
-        ),
-    },
-    async ({ submission_id, include_status }) => {
-      const gate = await requireProduct("codex_findings_fetch", "codex");
-      if (!gate.ok) return gate.content;
-      const tier = getCurrentTier();
-      const subject = getCurrentAccessSubject();
-      try {
-        let submissionTenant: string | undefined;
-        let statusPublic:
-          | {
-              generationId: string | null;
-              state: string;
-              startedAt: string | null;
-              completedAt: string | null;
-              error: string | null;
-            }
-          | undefined;
-
-        if (include_status) {
-          const statusRaw = await legacyClient.getFindingGenerationStatus({
-            submissionId: submission_id,
-          });
-          submissionTenant = statusRaw.jurisdictionTenant;
-          statusPublic = {
-            generationId: statusRaw.generationId,
-            state: statusRaw.state,
-            startedAt: statusRaw.startedAt,
-            completedAt: statusRaw.completedAt,
-            error: statusRaw.error,
-          };
-        }
-
-        const findingsResponse = await legacyClient.fetchSubmissionFindings({
-          submissionId: submission_id,
-        });
-        submissionTenant =
-          submissionTenant ?? findingsResponse.jurisdictionTenant;
-
-        const partition = assertSubmissionPartitionReadable(
-          subject,
-          submissionTenant,
-          "codex_findings_fetch",
-        );
-        if (!partition.ok) {
-          return errorContent(partition.message);
-        }
-
-        const findings = findingsResponse.findings as FindingWire[];
-        const citationAtomCount = findings.reduce(
-          (n, f) =>
-            n +
-            (f.citations?.filter((c) => c.kind === "code-section").length ?? 0),
-          0,
-        );
-        const atoms = provenanceEntriesFromFindings(
-          findings,
-          submission_id,
-          partition.submissionTenant,
-        );
-
-        const data: Record<string, unknown> = { findings };
-        if (include_status && statusPublic) {
-          data.status = statusPublic;
-        }
-        const __readEnv = codexEnvelope(data, atoms, { tier });
-        logToolRead({
-          tool: "codex_findings_fetch",
-          submission_id,
-          tier,
-          finding_count: findings.length,
-          citation_atom_count: citationAtomCount,
-          submission_tenant: partition.submissionTenant,
-        }, __readEnv.atoms);
-
-        return envelopeContent(__readEnv);
-      } catch (err) {
-        return errorContent(
-          describeLegacyFailure("codex_findings_fetch", err),
-        );
-      }
-    },
-  );
-
-  // -----------------------------------------------------------------
-  // Codex tool 2: codex_override_write
-  // Writes a reviewer-authored revision finding against an existing
-  // finding atom. Wraps POST /api/findings/:findingId/override.
-  // Note: known carry-over from PR #20 close-out: the 409
-  // finding_already_overridden envelope does not carry resolvedBy /
-  // resolvedAt fields, so cross-tab race attribution is partial. Tool
-  // callers should not rely on those fields when handling 409.
-  // -----------------------------------------------------------------
-  server.tool(
-    "codex_override_write",
-    "Codex (plan review): write a reviewer-authored override revision against an existing " +
-      "finding. Pass the finding atom id plus the new text, severity (blocker / concern / advisory), " +
-      "category (setback / height / coverage / egress / use / overlay-conflict / divergence-related / " +
-      "other), optional citations[] (code-section atomId or briefing-source id/label), and an optional " +
-      "reviewer comment. A finding can be overridden ONCE; a second override returns a 409 conflict. " +
-      CODEX_TIER,
-    {
-      finding_id: z
-        .string()
-        .min(1)
-        .describe("Finding atom id to override. Required."),
-      text: z
-        .string()
-        .min(1)
-        .describe("Reviewer-authored finding body. Required."),
-      severity: z
-        .enum(["blocker", "concern", "advisory"])
-        .describe(
-          "Finding severity: blocker (code violation requiring resolution), " +
-            "concern (ambiguity or risk), advisory (preference / coordination note). Required.",
-        ),
-      category: z
-        .enum([
-          "setback",
-          "height",
-          "coverage",
-          "egress",
-          "use",
-          "overlay-conflict",
-          "divergence-related",
-          "other",
-        ])
-        .describe("Finding category. Required."),
-      reviewer_comment: z
-        .string()
-        .optional()
-        .describe(
-          "Optional reviewer comment captured alongside the override. Surfaces in the audit chain.",
-        ),
-      citations: z
-        .array(FINDING_CITATION_SCHEMA)
-        .optional()
-        .describe(
-          "Citation lineage to preserve on the override revision. Code-section entries carry atomId verbatim; briefing-source entries carry id and label.",
-        ),
-    },
-    async ({ finding_id, text, severity, category, reviewer_comment, citations }) => {
-      const gate = await requireProduct("codex_override_write", "codex");
-      if (!gate.ok) return gate.content;
-      const tier = getCurrentTier();
-      try {
-        const response = await legacyClient.overrideFinding({
-          findingId: finding_id,
-          text,
-          severity,
-          category,
-          reviewerComment: reviewer_comment,
-          citations,
-        });
-        const overrideFinding = response.finding as FindingWire | undefined;
-        const overrideAtoms =
-          overrideFinding && Array.isArray(overrideFinding.citations)
-            ? provenanceEntriesFromFindings(
-                [overrideFinding],
-                String(overrideFinding.submissionId ?? "unknown"),
-                getCurrentAccessSubject().jurisdictionTenant ?? "legacy",
-              )
-            : [];
-        const __readEnv = codexEnvelope(
-            response,
-            overrideAtoms.length > 0
-              ? overrideAtoms
-              : codexProvenance({
-                  atomKind: "finding-override",
-                  rowId: finding_id,
-                  jurisdictionTenant: "legacy",
-                  sourcePath: `/api/findings/${finding_id}/override`,
-                }),
-            { tier },
-          );
-        logToolRead({
-          tool: "codex_override_write",
-          finding_id,
-          severity,
-          category,
-          tier,
-          citation_count: citations?.length ?? 0,
-        }, __readEnv.atoms);
-        return envelopeContent(__readEnv);
-      } catch (err) {
-        return errorContent(
-          describeLegacyFailure("codex_override_write", err),
-        );
-      }
-    },
-  );
-
-  // -----------------------------------------------------------------
-  // Codex tool 3: codex_briefing_fetch
-  // Returns the engagement's parcel briefing as a wire object, or null
-  // when no briefing has been uploaded yet. Wraps
-  // GET /api/engagements/:id/briefing.
-  // -----------------------------------------------------------------
-  server.tool(
-    "codex_briefing_fetch",
-    "Codex (plan review): fetch the parcel briefing for an engagement. " +
-      "Returns the briefing wire shape or { briefing: null } when no briefing has been uploaded " +
-      "yet. A 404 means the engagement id is unknown (input error, not empty result). " +
-      CODEX_TIER,
-    {
-      engagement_id: z
-        .string()
-        .uuid()
-        .describe("UUID of the engagement to fetch the briefing for. Required."),
-    },
-    async ({ engagement_id }) => {
-      const gate = await requireProduct("codex_briefing_fetch", "codex");
-      if (!gate.ok) return gate.content;
-      const tier = getCurrentTier();
-      try {
-        const response = await legacyClient.fetchBriefing({
-          engagementId: engagement_id,
-        });
-        const provenance = response.briefing
-          ? codexProvenance({
-              atomKind: "parcel-briefing",
-              rowId: engagement_id,
-              jurisdictionTenant: "legacy",
-              sourcePath: `/api/engagements/${engagement_id}/briefing`,
-            })
-          : null;
-        const __readEnv = codexEnvelope(response, provenance, { tier });
-        logToolRead({
-          tool: "codex_briefing_fetch",
-          engagement_id,
-          tier,
-          has_briefing: response.briefing !== null,
-        }, __readEnv.atoms);
-        return envelopeContent(__readEnv);
-      } catch (err) {
-        return errorContent(
-          describeLegacyFailure("codex_briefing_fetch", err),
-        );
-      }
-    },
-  );
-
-  // -----------------------------------------------------------------
-  // Codex tool 4: codex_snapshot_ingest
-  // Records that a plan-review package has been submitted to the
-  // jurisdiction. Wraps POST /api/engagements/:id/submissions.
-  // Downstream pipelines (auto-trigger classification + auto-trigger
-  // finding generation) fire automatically against the inserted row.
-  //
-  // Naming note: the Lane B dispatch named this tool snapshot_ingest
-  // matching its "PDF + metadata snapshot" intent. The legacy backend's
-  // /snapshots route is Cortex-side (Revit add-in model snapshots); the
-  // Codex-side analog is /engagements/:id/submissions. Surfacing as
-  // codex_snapshot_ingest preserves dispatch naming while wrapping the
-  // correct endpoint. Flagged in session summary for planner ratification.
-  // -----------------------------------------------------------------
-  server.tool(
-    "codex_snapshot_ingest",
-    "Codex (plan review): record a plan-review submission against an engagement. The legacy " +
-      "backend auto-triggers classification + finding generation downstream from the inserted " +
-      "row; chain into codex_finding_generation if you want to poll status explicitly. " +
-      "Optional discipline tag filters the canned-finding library on the reviewer side. " +
-      CODEX_TIER,
-    {
-      engagement_id: z
-        .string()
-        .uuid()
-        .describe(
-          "UUID of the engagement this submission belongs to. Required.",
-        ),
-      note: z
-        .string()
-        .max(2048)
-        .optional()
-        .describe(
-          'Optional free-text note (e.g. "Permit set v1, all sheets cleaned."). 2KB cap; rejected with 400 if longer.',
-        ),
-      discipline: z
-        .enum(["building", "fire", "zoning", "civil"])
-        .optional()
-        .describe(
-          "Optional discipline tag. Drives the reviewer's canned-finding library default.",
-        ),
-    },
-    async ({ engagement_id, note, discipline }) => {
-      const gate = await requireProduct("codex_snapshot_ingest", "codex");
-      if (!gate.ok) return gate.content;
-      const tier = getCurrentTier();
-      try {
-        const response = await legacyClient.createSubmission({
-          engagementId: engagement_id,
-          note,
-          discipline,
-        });
-        const submissionId =
-          typeof response.submission?.id === "string"
-            ? response.submission.id
-            : engagement_id;
-        const __readEnv = codexEnvelope(
-            response,
-            codexProvenance({
-              atomKind: "submission",
-              rowId: submissionId,
-              jurisdictionTenant: "legacy",
-              sourcePath: `/api/engagements/${engagement_id}/submissions`,
-            }),
-            { tier },
-          );
-        logToolRead({
-          tool: "codex_snapshot_ingest",
-          engagement_id,
-          submission_id: submissionId,
-          discipline,
-          tier,
-        }, __readEnv.atoms);
-        return envelopeContent(__readEnv);
-      } catch (err) {
-        return errorContent(
-          describeLegacyFailure("codex_snapshot_ingest", err),
-        );
-      }
-    },
-  );
+  registerPlanReviewTools(server);
 
   // -----------------------------------------------------------------
   // Cortex tool 1: cortex_snapshot_register
@@ -5163,59 +4761,20 @@ export function registerTools(server: McpServer) {
     lng: z.number().optional().describe("Longitude when address is omitted."),
   };
 
-  function wrapCotalityTool(
-    tool: string,
-    call: () => Promise<Record<string, unknown> | import("./legacy-client.js").CredentialPendingResponse>,
-    tier: ReturnType<typeof getCurrentTier>,
-  ) {
-    return call().then((response) => {
-      if (
-        typeof response === "object" &&
-        response !== null &&
-        "status" in response &&
-        response.status === "credential-pending"
-      ) {
-        const __readEnv = credentialPendingEnvelope(
-            response as import("./legacy-client.js").CredentialPendingResponse,
-            { tier, note: "Cotality quartet: atoms[] empty until CoreLogic OAuth materializes adapter atoms." },
-          );
-        logToolRead({
-          tool,
-          tier,
-          credential_pending: true,
-        }, __readEnv.atoms);
-        return envelopeContent(__readEnv);
-      }
-      const __readEnv = codexEnvelope(response, [], {
-        tier,
-        note: "Cotality adapter response — atoms[] empty until OAuth materializes Cotality atoms on the wire.",
-      });
-      logToolRead({
-        tool,
-        tier,
-        credential_pending: false,
-      }, __readEnv.atoms);
-      return envelopeContent(__readEnv);
-    });
+  function extinguishedCotality(tool: string) {
+    return errorContent(
+      `${tool}: extinguished. Cotality is dead. Re-route. Never rotate that credential. Zero outbound Cotality calls.`,
+    );
   }
 
   server.tool(
     "get_property_detail",
     TOOL_COPY.get_property_detail,
     cotalityLocationSchema,
-    async ({ address, lat, lng }) => {
+    async () => {
       const gate = await requireProduct("get_property_detail", "reporting");
       if (!gate.ok) return gate.content;
-      const tier = getCurrentTier();
-      try {
-        return await wrapCotalityTool(
-          "get_property_detail",
-          () => legacyClient.getPropertyDetail({ address, lat, lng }),
-          tier,
-        );
-      } catch (err) {
-        return errorContent(describeLegacyFailure("get_property_detail", err));
-      }
+      return extinguishedCotality("get_property_detail");
     },
   );
 
@@ -5223,19 +4782,10 @@ export function registerTools(server: McpServer) {
     "get_replacement_cost",
     TOOL_COPY.get_replacement_cost,
     cotalityLocationSchema,
-    async ({ address, lat, lng }) => {
+    async () => {
       const gate = await requireProduct("get_replacement_cost", "reporting");
       if (!gate.ok) return gate.content;
-      const tier = getCurrentTier();
-      try {
-        return await wrapCotalityTool(
-          "get_replacement_cost",
-          () => legacyClient.getReplacementCost({ address, lat, lng }),
-          tier,
-        );
-      } catch (err) {
-        return errorContent(describeLegacyFailure("get_replacement_cost", err));
-      }
+      return extinguishedCotality("get_replacement_cost");
     },
   );
 
@@ -5243,19 +4793,10 @@ export function registerTools(server: McpServer) {
     "get_hazard_profile",
     TOOL_COPY.get_hazard_profile,
     cotalityLocationSchema,
-    async ({ address, lat, lng }) => {
+    async () => {
       const gate = await requireProduct("get_hazard_profile", "map");
       if (!gate.ok) return gate.content;
-      const tier = getCurrentTier();
-      try {
-        return await wrapCotalityTool(
-          "get_hazard_profile",
-          () => legacyClient.getHazardProfile({ address, lat, lng }),
-          tier,
-        );
-      } catch (err) {
-        return errorContent(describeLegacyFailure("get_hazard_profile", err));
-      }
+      return extinguishedCotality("get_hazard_profile");
     },
   );
 
@@ -5263,19 +4804,10 @@ export function registerTools(server: McpServer) {
     "get_parcel_polygon",
     TOOL_COPY.get_parcel_polygon,
     cotalityLocationSchema,
-    async ({ address, lat, lng }) => {
+    async () => {
       const gate = await requireProduct("get_parcel_polygon", "map");
       if (!gate.ok) return gate.content;
-      const tier = getCurrentTier();
-      try {
-        return await wrapCotalityTool(
-          "get_parcel_polygon",
-          () => legacyClient.getParcelPolygon({ address, lat, lng }),
-          tier,
-        );
-      } catch (err) {
-        return errorContent(describeLegacyFailure("get_parcel_polygon", err));
-      }
+      return extinguishedCotality("get_parcel_polygon");
     },
   );
 

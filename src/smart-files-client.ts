@@ -28,7 +28,10 @@ function serviceToken(): string {
   return process.env.SMART_FILES_API_KEY ?? "";
 }
 
-async function smartFilesFetch<T>(path: string): Promise<T> {
+async function smartFilesFetch<T>(
+  path: string,
+  init: { method?: string; jsonBody?: unknown } = {},
+): Promise<T> {
   const url = `${smartFilesBackendUrl()}${path}`;
   const headers: Record<string, string> = {
     accept: "application/json",
@@ -36,12 +39,18 @@ async function smartFilesFetch<T>(path: string): Promise<T> {
   };
   const apiKey = serviceToken();
   if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+  if (init.jsonBody !== undefined) headers["content-type"] = "application/json";
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
   let res: Response;
   try {
-    res = await fetch(url, { headers, signal: controller.signal });
+    res = await fetch(url, {
+      method: init.method ?? "GET",
+      headers,
+      body: init.jsonBody !== undefined ? JSON.stringify(init.jsonBody) : undefined,
+      signal: controller.signal,
+    });
   } catch (err) {
     throw new LegacyUnreachableError(url, err);
   } finally {
@@ -102,6 +111,36 @@ export const smartFilesClient = {
   listPlacements(entityId: string) {
     return smartFilesFetch<{ entityId: string; placements: unknown[]; servedAt: string }>(
       `/api/smart-files/files/${encodeURIComponent(entityId)}/placements`,
+    );
+  },
+
+  createFolder(body: { orgId: string; userId: string; label: string; parentFolderId?: string }) {
+    return smartFilesFetch<Record<string, unknown>>("/api/smart-files/folders", {
+      method: "POST",
+      jsonBody: body,
+    });
+  },
+
+  uploadFile(
+    folderId: string,
+    body: {
+      orgId: string;
+      userId: string;
+      title: string;
+      contentType?: string;
+      bytesBase64: string;
+    },
+  ) {
+    return smartFilesFetch<Record<string, unknown>>(
+      `/api/smart-files/folders/${encodeURIComponent(folderId)}/files`,
+      { method: "POST", jsonBody: body },
+    );
+  },
+
+  shareFolder(folderId: string, body: { orgId: string; userId: string }) {
+    return smartFilesFetch<Record<string, unknown>>(
+      `/api/smart-files/folders/${encodeURIComponent(folderId)}/share`,
+      { method: "POST", jsonBody: body },
     );
   },
 };
