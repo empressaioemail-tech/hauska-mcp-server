@@ -170,20 +170,19 @@ export const TOOL_COPY = {
     REPORTING_TIER,
 
   get_property_detail:
-    "Cotality property-characteristics adapter (DESIGNED, INERT until CoreLogic OAuth clears). " +
-    "Returns credential-pending when credentials are absent — never fake data. atoms[] stays empty until OAuth materializes Cotality atoms. " +
+    "Extinguished. Cotality/CoreLogic property-characteristics adapter is dead. Re-route. Never rotate that credential. Zero outbound Cotality calls. " +
     REPORTING_TIER,
 
   get_replacement_cost:
-    "Cotality replacement-cost adapter (DESIGNED, INERT until CoreLogic OAuth clears). atoms[] empty until OAuth. " +
+    "Extinguished. Cotality replacement-cost adapter is dead. Re-route. Zero outbound Cotality calls. " +
     REPORTING_TIER,
 
   get_hazard_profile:
-    "Cotality hazard/climate adapter (DESIGNED, INERT until CoreLogic OAuth clears). atoms[] empty until OAuth. " +
+    "Extinguished Cotality copy. Hazard/climate is not a CoreLogic call. NFHL rewire is not this card. Zero outbound Cotality. " +
     MAP_TIER,
 
   get_parcel_polygon:
-    "Cotality parcel-polygon adapter (DESIGNED, INERT until CoreLogic OAuth clears). atoms[] empty until OAuth. " +
+    "Extinguished Cotality copy. Parcel polygon is not a CoreLogic call. Zero outbound Cotality. " +
     MAP_TIER,
 
   compose_workspace:
@@ -229,5 +228,16 @@ export const TOOL_COPY = {
 
   list_smart_file_placements:
     "List placed-on edges for a smart-file document entityId. Same entityId may appear in multiple folders. Requires reporting API key. " +
+    REPORTING_TIER,
+  create_smart_file_folder:
+    "Create a Smart Files folder on the isolated files service. Requires reporting or Codex API key. " +
+    REPORTING_TIER,
+
+  upload_smart_file:
+    "Upload a file-shaped atom into a Smart Files folder (bytesBase64). Not cortex-api. " +
+    REPORTING_TIER,
+
+  share_smart_file_folder:
+    "Create a share token for one Smart Files folder. Token is that room only. " +
     REPORTING_TIER,
 } as const;

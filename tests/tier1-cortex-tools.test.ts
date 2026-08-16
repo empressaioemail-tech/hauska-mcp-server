@@ -175,24 +175,23 @@ test("searchEncumbrances GETs workspace encumbrances with workspaceDid", async (
   );
 });
 
-test("Cotality adapters return credential-pending without env creds", async () => {
+test("Cotality adapters fail closed extinguished and never call", async () => {
   assert.equal(cotalityCredentialsConfigured(), false);
   const res = await legacyClient.getPropertyDetail({
     address: "1 Main St",
   });
   assert.equal(calls.length, 0);
-  assert.equal(res.status, "credential-pending");
+  assert.equal(res.status, "extinguished");
   assert.equal(res.adapter, "cotality:property");
 });
 
-test("Cotality adapters call backend when creds are configured", async () => {
+test("Cotality adapters never call backend even when creds are configured", async () => {
   process.env.COTALITY_CLIENT_ID = "client-id";
   process.env.COTALITY_CLIENT_SECRET = "client-secret";
   mockResponse = { status: 200, body: { ok: true } };
-  await legacyClient.getHazardProfile({ lat: 30.5, lng: -97.7 });
-  assert.equal(calls.length, 1);
-  const url = new URL(calls[0]!.url);
-  assert.equal(url.pathname, "/api/brokerage/v1/cotality/hazard-profile");
+  const res = await legacyClient.getHazardProfile({ lat: 30.5, lng: -97.7 });
+  assert.equal(calls.length, 0);
+  assert.equal(res.status, "extinguished");
 });
 
 test("generateBriefEnvelope surfaces brief-run DID provenance", () => {

@@ -2590,19 +2590,15 @@ export const legacyClient = {
     address?: string;
     lat?: number;
     lng?: number;
-  }): Promise<Record<string, unknown> | CredentialPendingResponse> {
-    if (!cotalityCredentialsConfigured()) {
-      return this.credentialPending(params.adapter);
-    }
-    const jsonBody: Record<string, unknown> = {};
-    if (params.address !== undefined) jsonBody.address = params.address;
-    if (params.lat !== undefined) jsonBody.lat = params.lat;
-    if (params.lng !== undefined) jsonBody.lng = params.lng;
-    const { body } = await brokerageFetch<Record<string, unknown>>(
-      COTALITY_ADAPTER_ROUTES[params.adapter],
-      { method: "POST", jsonBody },
-    );
-    return body;
+  }): Promise<Record<string, unknown>> {
+    return {
+      status: "extinguished",
+      adapter: params.adapter,
+      error: "extinguished",
+      message:
+        "Cotality is extinguished. Re-route. Never rotate that credential. Zero outbound Cotality calls.",
+      cotalityCalls: 0,
+    };
   },
 
   async getPropertyDetail(params: {

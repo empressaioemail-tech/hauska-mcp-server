@@ -13,7 +13,7 @@ import {
 import { buildEnvelope } from "./atom-shape.js";
 import type { EnforcedAccessPolicy } from "./access-policy.js";
 import { LegacyHttpError } from "./legacy-client.js";
-import { getCurrentAccessSubject, getCurrentTier } from "./request-context.js";
+import { getCurrentAccessSubject, getCurrentProduct, getCurrentTier } from "./request-context.js";
 import { smartFilesClient } from "./smart-files-client.js";
 import { REPORTING_TIER, TOOL_COPY } from "./tool-copy.js";
 
@@ -44,13 +44,13 @@ function policyTarget(accessPolicy: string, scopeType: string, scopeId: string) 
   };
 }
 
-async function requireReporting(tool: string) {
-  const subject = getCurrentAccessSubject();
-  if (subject.tier === "free_anonymous") {
+async function requireFilesCaller(tool: string) {
+  const product = getCurrentProduct();
+  if (product !== "reporting" && product !== "codex") {
     return {
       ok: false as const,
       content: errorContent(
-        `${tool} requires an authenticated API key (reporting product). Anonymous callers are refused.`,
+        `${tool} requires a reporting or Codex API key (got product "${product}"). Anonymous callers are refused.`,
       ),
     };
   }
@@ -66,7 +66,7 @@ export function registerSmartFilesTools(server: McpServer): void {
       scopeId: z.string().min(1),
     },
     async ({ scopeType, scopeId }) => {
-      const gate = await requireReporting("list_smart_file_folders");
+      const gate = await requireFilesCaller("list_smart_file_folders");
       if (!gate.ok) return gate.content;
       try {
         const data = await smartFilesClient.listFolders(scopeType, scopeId);
@@ -102,7 +102,7 @@ export function registerSmartFilesTools(server: McpServer): void {
     TOOL_COPY.list_smart_file_folder_files,
     { folderId: z.string().min(1) },
     async ({ folderId }) => {
-      const gate = await requireReporting("list_smart_file_folder_files");
+      const gate = await requireFilesCaller("list_smart_file_folder_files");
       if (!gate.ok) return gate.content;
       try {
         const data = await smartFilesClient.listFolderFiles(folderId);
@@ -149,7 +149,7 @@ export function registerSmartFilesTools(server: McpServer): void {
       version: z.number().int().positive().optional(),
     },
     async ({ entityId, version }) => {
-      const gate = await requireReporting("read_smart_file");
+      const gate = await requireFilesCaller("read_smart_file");
       if (!gate.ok) return gate.content;
       try {
         const data = await smartFilesClient.readFile(entityId, version);
@@ -190,7 +190,7 @@ export function registerSmartFilesTools(server: McpServer): void {
     TOOL_COPY.list_smart_file_placements,
     { entityId: z.string().min(1) },
     async ({ entityId }) => {
-      const gate = await requireReporting("list_smart_file_placements");
+      const gate = await requireFilesCaller("list_smart_file_placements");
       if (!gate.ok) return gate.content;
       try {
         const readFirst = await smartFilesClient.readFile(entityId);
@@ -224,6 +224,75 @@ export function registerSmartFilesTools(server: McpServer): void {
         return envelopeContent(env);
       } catch (err) {
         return errorContent(describeLegacyFailure("list_smart_file_placements", err));
+      }
+    },
+  );
+
+  server.tool(
+    "create_smart_file_folder",
+    TOOL_COPY.create_smart_file_folder,
+    {
+      orgId: z.string().min(1),
+      userId: z.string().min(1),
+      label: z.string().min(1),
+    },
+    async ({ orgId, userId, label }) => {
+      const gate = await requireFilesCaller("create_smart_file_folder");
+      if (!gate.ok) return gate.content;
+      try {
+        const data = await smartFilesClient.createFolder({ orgId, userId, label });
+        return envelopeContent(
+          buildEnvelope(data, [], { tier: getCurrentTier(), readKind: "catalog" }),
+        );
+      } catch (err) {
+        return errorContent(describeLegacyFailure("create_smart_file_folder", err));
+      }
+    },
+  );
+
+  server.tool(
+    "upload_smart_file",
+    TOOL_COPY.upload_smart_file,
+    {
+      folderId: z.string().min(1),
+      orgId: z.string().min(1),
+      userId: z.string().min(1),
+      title: z.string().min(1),
+      bytesBase64: z.string().min(1),
+      contentType: z.string().optional(),
+    },
+    async (args) => {
+      const gate = await requireFilesCaller("upload_smart_file");
+      if (!gate.ok) return gate.content;
+      try {
+        const data = await smartFilesClient.uploadFile(args.folderId, args);
+        return envelopeContent(
+          buildEnvelope(data, [], { tier: getCurrentTier(), readKind: "catalog" }),
+        );
+      } catch (err) {
+        return errorContent(describeLegacyFailure("upload_smart_file", err));
+      }
+    },
+  );
+
+  server.tool(
+    "share_smart_file_folder",
+    TOOL_COPY.share_smart_file_folder,
+    {
+      folderId: z.string().min(1),
+      orgId: z.string().min(1),
+      userId: z.string().min(1),
+    },
+    async ({ folderId, orgId, userId }) => {
+      const gate = await requireFilesCaller("share_smart_file_folder");
+      if (!gate.ok) return gate.content;
+      try {
+        const data = await smartFilesClient.shareFolder(folderId, { orgId, userId });
+        return envelopeContent(
+          buildEnvelope(data, [], { tier: getCurrentTier(), readKind: "catalog" }),
+        );
+      } catch (err) {
+        return errorContent(describeLegacyFailure("share_smart_file_folder", err));
       }
     },
   );

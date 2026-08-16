@@ -65,7 +65,7 @@ function cortexApiUrl(): string {
 // "degraded" (up but unhealthy); any other status is "ok" (an
 // unauthenticated probe drawing a 401/404 still proves reachability). A
 // transport error or timeout is "down".
-async function probeHttp(
+export async function probeHttp(
   url: string,
   headers: Record<string, string> = {},
 ): Promise<DepHealth> {
@@ -81,6 +81,9 @@ async function probeHttp(
     const latency = Date.now() - started;
     if (res.status >= 500) {
       return { state: "degraded", latency_ms: latency, detail: `HTTP ${res.status}` };
+    }
+    if (res.status === 404) {
+      return { state: "degraded", latency_ms: latency, detail: "HTTP 404 is not ok" };
     }
     return {
       state: "ok",
@@ -183,7 +186,7 @@ export async function probeRateLimitStore(): Promise<DepHealth> {
 export const probeUpstash = probeRateLimitStore;
 
 const defaultProbes: ProbeFns = {
-  engine: () => probeHttp(`${engineUrl()}/healthz`),
+  engine: () => probeHttp(`${engineUrl()}/health`),
   cortexApi: () => probeHttp(`${cortexApiUrl()}/api/healthz`),
   postgres: probePostgres,
   rateLimitStore: probeRateLimitStore,
