@@ -184,6 +184,15 @@ export function toolGateMetadata(name: string): ToolProductGate {
       anonymous_ok: false,
     };
   }
+  if (name === "dashboards_list_lenses") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Public lens catalog (definitions, not a tenant pack). Anonymous OK. Calls Dashboards HTTP. Not an atom read.",
+      anonymous_ok: true,
+    };
+  }
   if (name === "dashboards_get_city_pack") {
     return {
       product: "public",
