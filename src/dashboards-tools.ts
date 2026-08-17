@@ -1,7 +1,7 @@
 /**
  * Dashboards MCP tools on the existing Hauska MCP server (G-61 item 6 / G-62 item 5).
  * No second MCP process. No Product "dashboards". Not cortex-api.
- * Compose is anonymous; city-pack stays identified-caller.
+ * Compose is anonymous; adapter kinds are anonymous; city-pack stays identified-caller.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -128,6 +128,22 @@ export function registerDashboardsTools(server: McpServer): void {
             cityKey: city_key,
           }),
         );
+      } catch (err) {
+        return errorContent(describeFailure(tool, err));
+      }
+    },
+  );
+
+  server.tool(
+    "dashboards_list_adapter_kinds",
+    TOOL_COPY.dashboards_list_adapter_kinds,
+    {},
+    async () => {
+      const tool = "dashboards_list_adapter_kinds";
+      const gate = requireBackend(tool);
+      if (!gate.ok) return gate.content;
+      try {
+        return wrap(await dashboardsClient.listAdapterKinds());
       } catch (err) {
         return errorContent(describeFailure(tool, err));
       }

@@ -259,4 +259,10 @@ export const TOOL_COPY = {
     "Calls GET /api/lenses/city-manager/compose on DASHBOARDS_BACKEND_URL. " +
     "Not cortex-api. Not the live Bastrop city. " +
     PUBLIC_TIER,
+
+  dashboards_list_adapter_kinds:
+    "List Dashboards adapter kinds (catalog of ingest shapes: writesTo spine or files, default accessPolicy). " +
+    "Kinds only; not a city grant and not credentials. Anonymous OK. " +
+    "Calls GET /api/adapter-kinds on DASHBOARDS_BACKEND_URL. Not cortex-api. Not the live Bastrop city. " +
+    PUBLIC_TIER,
 } as const;

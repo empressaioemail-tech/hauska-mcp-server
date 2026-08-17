@@ -33,6 +33,9 @@ test("toolGateMetadata classifies public, reporting, codex, map", () => {
   assert.equal(toolGateMetadata("dashboards_compose_city_manager").gate, "access_policy");
   assert.equal(toolGateMetadata("dashboards_compose_city_manager").anonymous_ok, true);
   assert.notEqual(toolGateMetadata("dashboards_compose_city_manager").gate, "identified_caller");
+  assert.equal(toolGateMetadata("dashboards_list_adapter_kinds").gate, "access_policy");
+  assert.equal(toolGateMetadata("dashboards_list_adapter_kinds").anonymous_ok, true);
+  assert.notEqual(toolGateMetadata("dashboards_list_adapter_kinds").gate, "identified_caller");
   assert.equal(toolGateMetadata("dashboards_get_city_pack").gate, "identified_caller");
   assert.equal(toolGateMetadata("dashboards_get_city_pack").anonymous_ok, false);
   assert.equal(toolGateMetadata("dashboards_get_city_pack").product, "public");
@@ -50,6 +53,7 @@ test("listIntrospectionTools returns wire-accurate catalog", async () => {
   assert.ok(catalog.tools.some((t) => t.name === "dashboards_list_lenses"));
   assert.ok(catalog.tools.some((t) => t.name === "dashboards_get_city_pack"));
   assert.ok(catalog.tools.some((t) => t.name === "dashboards_compose_city_manager"));
+  assert.ok(catalog.tools.some((t) => t.name === "dashboards_list_adapter_kinds"));
   const accessPolicyNames = catalog.tools
     .filter((t) => t.gate === "access_policy")
     .map((t) => t.name)
@@ -69,6 +73,8 @@ test("listIntrospectionTools returns wire-accurate catalog", async () => {
   assert.ok(IDENTIFIED_CALLER_TOOLS.has("dashboards_get_city_pack"));
   assert.equal(IDENTIFIED_CALLER_TOOLS.has("dashboards_compose_city_manager"), false);
   assert.ok(PUBLIC_CATALOG_TOOLS.has("dashboards_compose_city_manager"));
+  assert.equal(IDENTIFIED_CALLER_TOOLS.has("dashboards_list_adapter_kinds"), false);
+  assert.ok(PUBLIC_CATALOG_TOOLS.has("dashboards_list_adapter_kinds"));
   const remainder = catalog.tools
     .map((t) => t.name)
     .filter((name) => !cataloguedToolNames().has(name))

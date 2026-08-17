@@ -124,6 +124,17 @@ test("dashboards_compose_city_manager is public catalog anonymous_ok not identif
   assert.equal(IDENTIFIED_CALLER_TOOLS.has("dashboards_compose_city_manager"), false);
 });
 
+test("dashboards_list_adapter_kinds is public catalog anonymous_ok not identified_caller", () => {
+  const meta = toolGateMetadata("dashboards_list_adapter_kinds");
+  assert.equal(meta.product, "public");
+  assert.equal(meta.gate, "access_policy");
+  assert.equal(meta.anonymous_ok, true);
+  assert.notEqual(meta.gate, "identified_caller");
+  assert.equal(requiredProductForTool("dashboards_list_adapter_kinds"), undefined);
+  assert.ok(PUBLIC_CATALOG_TOOLS.has("dashboards_list_adapter_kinds"));
+  assert.equal(IDENTIFIED_CALLER_TOOLS.has("dashboards_list_adapter_kinds"), false);
+});
+
 test("composeCityManager hits compose URL with query string and default cityKey", async () => {
   process.env.DASHBOARDS_BACKEND_URL = "https://dashboards.example.test";
   await dashboardsClient.composeCityManager({ parcelNodeId: "48021:34137" });
@@ -182,4 +193,22 @@ test("dashboards tools are catalogued and are not a fifth Product", () => {
   assert.ok(cataloguedToolNames().has("dashboards_list_lenses"));
   assert.ok(cataloguedToolNames().has("dashboards_get_city_pack"));
   assert.ok(cataloguedToolNames().has("dashboards_compose_city_manager"));
+  assert.ok(cataloguedToolNames().has("dashboards_list_adapter_kinds"));
+});
+
+test("listAdapterKinds hits adapter-kinds URL and omits Authorization even when DASHBOARDS_API_KEY is set", async () => {
+  process.env.DASHBOARDS_BACKEND_URL = "https://dashboards.example.test";
+  process.env.DASHBOARDS_API_KEY = "test-token";
+  await dashboardsClient.listAdapterKinds();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.url, "https://dashboards.example.test/api/adapter-kinds");
+  assert.equal(calls[0]!.auth, undefined);
+});
+
+test("listAdapterKinds fails closed when DASHBOARDS_BACKEND_URL is unset", async () => {
+  await assert.rejects(
+    () => dashboardsClient.listAdapterKinds(),
+    /DASHBOARDS_BACKEND_URL is required/,
+  );
+  assert.equal(calls.length, 0);
 });

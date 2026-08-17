@@ -1,8 +1,8 @@
 /**
- * Dashboards HTTP client. G-61 item 6 / G-62 item 5.
+ * Dashboards HTTP client. G-61 item 6 / G-62 item 5 / G-63 item 5.
  * Calls the Dashboards product service, not cortex-api and not the live city.
  * Zero DSN. Does not read LEGACY_BACKEND_URL.
- * Compose is the public proof lens: no DASHBOARDS_API_KEY, no engine/retrieval keys.
+ * Compose and adapter-kinds are public: no DASHBOARDS_API_KEY.
  */
 
 import { LegacyHttpError, LegacyUnreachableError } from "./legacy-client.js";
@@ -37,7 +37,7 @@ async function dashboardsFetch<T>(
   const url = `${dashboardsBackendUrl()}${path}`;
   const headers: Record<string, string> = {
     accept: "application/json",
-    "user-agent": "hauska-mcp-server/g62",
+    "user-agent": "hauska-mcp-server/g63",
   };
   if (opts.authorization === "service") {
     const apiKey = serviceToken();
@@ -69,6 +69,11 @@ async function dashboardsFetch<T>(
 export const dashboardsClient = {
   listLenses() {
     return dashboardsFetch<Record<string, unknown>>("/api/lenses");
+  },
+  listAdapterKinds() {
+    return dashboardsFetch<Record<string, unknown>>("/api/adapter-kinds", {
+      authorization: "omit",
+    });
   },
   getCityPack(cityKey: string) {
     return dashboardsFetch<Record<string, unknown>>(

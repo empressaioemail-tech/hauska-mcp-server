@@ -101,6 +101,7 @@ export const PUBLIC_CATALOG_TOOLS = new Set([
   "dashboards_list_lenses",
   "dashboards_get_city_pack",
   "dashboards_compose_city_manager",
+  "dashboards_list_adapter_kinds",
 ]);
 
 /** Public-product tools that require an identified caller (not anonymous, not a product SKU). */
@@ -192,6 +193,15 @@ export function toolGateMetadata(name: string): ToolProductGate {
       gate: "access_policy",
       gate_summary:
         "Public lens catalog (definitions, not a tenant pack). Anonymous OK. Calls Dashboards HTTP. Not an atom read.",
+      anonymous_ok: true,
+    };
+  }
+  if (name === "dashboards_list_adapter_kinds") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Public adapter-kind catalog (kinds, not grants, not credentials). Anonymous OK. Calls Dashboards HTTP. Not a connected feed.",
       anonymous_ok: true,
     };
   }
