@@ -219,7 +219,7 @@ export function toolGateMetadata(name: string): ToolProductGate {
       product: "public",
       gate: "identified_caller",
       gate_summary:
-        "Requires authenticated API key. Tenant city pack, not the public lens catalog. Anonymous refused.",
+        "Requires authenticated API key. Tenant city pack, not the public lens catalog. Anonymous refused. Private pack requires jurisdiction_tenant equal to cityKey; wrong tenant isError. template-city stays the public template.",
       anonymous_ok: false,
     };
   }

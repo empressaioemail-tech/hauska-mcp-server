@@ -65,6 +65,17 @@ export function addLogSink(sink: LogSink): void {
   sinks.push(sink);
 }
 
+function withoutPresentedKey(
+  fields: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(fields, "presented_key")) {
+    return fields;
+  }
+  const rest = { ...fields };
+  delete rest.presented_key;
+  return rest;
+}
+
 function emit(
   level: LogLevel,
   event: string,
@@ -78,7 +89,7 @@ function emit(
     event,
     env: ENV,
     ...(requestId ? { request_id: requestId } : {}),
-    ...fields,
+    ...withoutPresentedKey(fields),
   };
   for (const sink of sinks) {
     try {

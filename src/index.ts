@@ -12,7 +12,12 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import type { NextFunction, Request, Response } from "express";
 
-import { adminAuthMiddleware, buildAuthMiddleware, type AuthContext } from "./auth.js";
+import {
+  adminAuthMiddleware,
+  buildAuthMiddleware,
+  whoamiHandler,
+  type AuthContext,
+} from "./auth.js";
 import { buildAdminRouter } from "./admin.js";
 import { emitGateProbeSignal, runGateProbe } from "./gate-probe.js";
 import { createHealthHandler, createReadinessHandler } from "./health-routes.js";
@@ -285,6 +290,11 @@ async function main() {
   // /admin/*) can reach it with its reporting key.
   app.get("/metering/summary", authMiddleware, getMeteringSummary);
 
+  // G-11: Dashboards resolves X-Hauska-Key here. Plain JSON, no key
+  // material. Anonymous callers get anonymous:true. Unknown keys 401
+  // from authMiddleware before this handler runs.
+  app.get("/auth/whoami", authMiddleware, whoamiHandler);
+
   // The MCP endpoint. Auth runs first, then the transport handles the
   // JSON-RPC request. The auth context is bound via AsyncLocalStorage so
   // tool handlers (which do not see Express req) can read the caller's
@@ -378,6 +388,7 @@ async function main() {
       health: "/health",
       readiness: "/health/ready",
       healthz: "/healthz",
+      whoami: "/auth/whoami",
       gate_probe: "/gate-probe",
       admin: "/admin/keys",
       admin_introspection: "/admin/introspection/tools",

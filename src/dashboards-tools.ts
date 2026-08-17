@@ -8,7 +8,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { buildEnvelope } from "./atom-shape.js";
-import { dashboardsBackendUrl, dashboardsClient } from "./dashboards-client.js";
+import {
+  dashboardsBackendUrl,
+  dashboardsClient,
+  TEMPLATE_CITY_KEY,
+} from "./dashboards-client.js";
 import { LegacyHttpError } from "./legacy-client.js";
 import { getCurrentAuthContext, getCurrentTier } from "./request-context.js";
 import { TOOL_COPY } from "./tool-copy.js";
@@ -46,6 +50,18 @@ function requireIdentified(tool: string) {
     ok: false as const,
     content: errorContent(
       `Tool "${tool}" requires an authenticated API key. Anonymous callers are refused.`,
+    ),
+  };
+}
+
+function requirePackTenant(tool: string, cityKey: string) {
+  if (cityKey === TEMPLATE_CITY_KEY) return { ok: true as const };
+  const tenant = getCurrentAuthContext()?.jurisdiction_tenant?.trim() ?? "";
+  if (tenant === cityKey) return { ok: true as const };
+  return {
+    ok: false as const,
+    content: errorContent(
+      `${tool}: city pack "${cityKey}" requires a Hauska product key bound to that tenant. Wrong tenant is refused.`,
     ),
   };
 }
@@ -90,10 +106,20 @@ export function registerDashboardsTools(server: McpServer): void {
       const tool = "dashboards_get_city_pack";
       const identity = requireIdentified(tool);
       if (!identity.ok) return identity.content;
+      const tenant = requirePackTenant(tool, cityKey);
+      if (!tenant.ok) return tenant.content;
       const gate = requireBackend(tool);
       if (!gate.ok) return gate.content;
       try {
-        return wrap(await dashboardsClient.getCityPack(cityKey));
+        const hauskaKey = getCurrentAuthContext()?.presented_key;
+        if (cityKey !== TEMPLATE_CITY_KEY && !hauskaKey) {
+          return errorContent(
+            `${tool}: identified caller is missing the presented Hauska key; cannot forward tenant subject.`,
+          );
+        }
+        return wrap(
+          await dashboardsClient.getCityPack(cityKey, { hauskaKey }),
+        );
       } catch (err) {
         return errorContent(describeFailure(tool, err));
       }

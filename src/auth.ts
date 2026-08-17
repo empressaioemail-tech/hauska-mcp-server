@@ -40,6 +40,10 @@ export interface AuthContext {
   // Present only for authenticated requests.
   key_id?: string;
   key_hash?: string;
+  // Raw X-Hauska-Key, in-memory only, so tools can forward the same
+  // subject to Dashboards. Never log this field. Never put it on a
+  // response body.
+  presented_key?: string;
   // The rate-limit identifier actually used (for log correlation).
   rate_limit_id: string;
   remaining_rpm: number;
@@ -185,6 +189,7 @@ export function buildAuthMiddleware(store: RateLimitStore) {
         platform_internal: row.platform_internal,
         key_id: row.key_id,
         key_hash: row.key_hash,
+        presented_key: rawKey,
         rate_limit_id: identifier,
         remaining_rpm: decision.remaining_rpm,
         remaining_daily: decision.remaining_daily,
@@ -229,6 +234,29 @@ export function buildAuthMiddleware(store: RateLimitStore) {
     };
     next();
   };
+}
+
+export interface WhoamiResponse {
+  anonymous: boolean;
+  jurisdiction_tenant: string | null;
+}
+
+export function whoamiFromContext(
+  ctx: AuthContext | undefined,
+): WhoamiResponse {
+  const identified = typeof ctx?.key_id === "string" && ctx.key_id.length > 0;
+  if (!identified) {
+    return { anonymous: true, jurisdiction_tenant: null };
+  }
+  const tenant = ctx?.jurisdiction_tenant?.trim() ?? "";
+  return {
+    anonymous: false,
+    jurisdiction_tenant: tenant.length > 0 ? tenant : null,
+  };
+}
+
+export function whoamiHandler(req: Request, res: Response) {
+  res.json(whoamiFromContext(req.hauska));
 }
 
 // Bootstrap-key middleware for /admin/* routes. Compares against
