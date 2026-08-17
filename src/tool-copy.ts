@@ -240,4 +240,16 @@ export const TOOL_COPY = {
   share_smart_file_folder:
     "Create a share token for one Smart Files folder. Token is that room only. " +
     REPORTING_TIER,
+
+  dashboards_list_lenses:
+    "List Dashboards lead lenses (city manager, development services, finance, citizen). " +
+    "Lens definitions only; not a tenant city pack. Citizen is a lens, not a SKU. " +
+    "Calls GET /api/lenses on DASHBOARDS_BACKEND_URL. Not cortex-api. Not the live Bastrop city. " +
+    PUBLIC_TIER,
+
+  dashboards_get_city_pack:
+    "Fetch one Dashboards city pack by cityKey (tenant pack over the G-13 consumer contract). " +
+    "Requires an authenticated API key. Anonymous callers are refused. " +
+    "Calls GET /api/city-packs/{cityKey} on DASHBOARDS_BACKEND_URL. Not cortex-api. Not the live Bastrop city. " +
+    "Typical failures: auth_reject (missing key), unknown city pack, DASHBOARDS_BACKEND_URL unset.",
 } as const;

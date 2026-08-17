@@ -99,6 +99,7 @@ import { logger } from "./logger.js";
 import type { Product } from "./products.js";
 import { registerSmartFilesTools } from "./smart-files-tools.js";
 import { registerPlanReviewTools } from "./plan-review-tools.js";
+import { registerDashboardsTools } from "./dashboards-tools.js";
 import {
   canReadAccessTarget,
   effectiveAccessPolicy,
@@ -5149,4 +5150,5 @@ export function registerTools(server: McpServer) {
   );
 
   registerSmartFilesTools(server);
+  registerDashboardsTools(server);
 }
