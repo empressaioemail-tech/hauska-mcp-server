@@ -98,6 +98,12 @@ export const PUBLIC_CATALOG_TOOLS = new Set([
   "search_permit_atoms",
   "list_jurisdictions",
   "atom_trace",
+  "dashboards_list_lenses",
+]);
+
+/** Public-product tools that require an identified caller (not anonymous, not a product SKU). */
+export const IDENTIFIED_CALLER_TOOLS = new Set([
+  "dashboards_get_city_pack",
 ]);
 
 export const CODEX_TOOLS = new Set([
@@ -178,6 +184,15 @@ export function toolGateMetadata(name: string): ToolProductGate {
       anonymous_ok: false,
     };
   }
+  if (name === "dashboards_get_city_pack") {
+    return {
+      product: "public",
+      gate: "identified_caller",
+      gate_summary:
+        "Requires authenticated API key. Tenant city pack, not the public lens catalog. Anonymous refused.",
+      anonymous_ok: false,
+    };
+  }
   if (PUBLIC_CATALOG_TOOLS.has(name)) {
     return {
       product: "public",
@@ -241,6 +256,7 @@ export function cataloguedToolNames(): Set<string> {
     ...CODEX_TOOLS,
     ...MAP_TOOLS,
     ...REPORTING_TOOLS,
+    ...IDENTIFIED_CALLER_TOOLS,
   ]);
 }
 
