@@ -15,6 +15,7 @@ import {
 } from "../src/mcp-introspection.js";
 import {
   cataloguedToolNames,
+  IDENTIFIED_CALLER_TOOLS,
   PUBLIC_CATALOG_TOOLS,
 } from "../src/product-gates.js";
 import { MemoryRateLimitStore } from "../src/rate-limit.js";
@@ -49,11 +50,19 @@ test("listIntrospectionTools returns wire-accurate catalog", async () => {
     .filter((t) => t.gate === "access_policy")
     .map((t) => t.name)
     .sort();
+  const publicAccessPolicy = [...PUBLIC_CATALOG_TOOLS]
+    .filter((name) => !IDENTIFIED_CALLER_TOOLS.has(name))
+    .sort();
   assert.deepEqual(
     accessPolicyNames,
-    [...PUBLIC_CATALOG_TOOLS].sort(),
-    "access_policy gate set must equal PUBLIC_CATALOG_TOOLS (not a magic count)",
+    publicAccessPolicy,
+    "access_policy gate set must equal PUBLIC_CATALOG_TOOLS minus IDENTIFIED_CALLER_TOOLS",
   );
+  assert.ok(
+    PUBLIC_CATALOG_TOOLS.has("dashboards_get_city_pack"),
+    "city-pack must be in PUBLIC_CATALOG_TOOLS (CI four-set union)",
+  );
+  assert.ok(IDENTIFIED_CALLER_TOOLS.has("dashboards_get_city_pack"));
   const remainder = catalog.tools
     .map((t) => t.name)
     .filter((name) => !cataloguedToolNames().has(name))

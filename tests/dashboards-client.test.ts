@@ -8,6 +8,8 @@ import {
 import { PRODUCTS } from "../src/products.js";
 import {
   cataloguedToolNames,
+  IDENTIFIED_CALLER_TOOLS,
+  PUBLIC_CATALOG_TOOLS,
   requiredProductForTool,
   toolGateMetadata,
 } from "../src/product-gates.js";
@@ -103,6 +105,8 @@ test("dashboards_get_city_pack is identified_caller not anonymous", () => {
   assert.equal(meta.gate, "identified_caller");
   assert.equal(meta.anonymous_ok, false);
   assert.equal(requiredProductForTool("dashboards_get_city_pack"), undefined);
+  assert.ok(PUBLIC_CATALOG_TOOLS.has("dashboards_get_city_pack"));
+  assert.ok(IDENTIFIED_CALLER_TOOLS.has("dashboards_get_city_pack"));
 });
 
 test("dashboards tools are catalogued and are not a fifth Product", () => {

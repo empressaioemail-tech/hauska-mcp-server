@@ -99,6 +99,7 @@ export const PUBLIC_CATALOG_TOOLS = new Set([
   "list_jurisdictions",
   "atom_trace",
   "dashboards_list_lenses",
+  "dashboards_get_city_pack",
 ]);
 
 /** Public-product tools that require an identified caller (not anonymous, not a product SKU). */
