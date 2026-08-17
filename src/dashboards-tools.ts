@@ -1,6 +1,7 @@
 /**
- * Dashboards MCP tools on the existing Hauska MCP server (G-61 item 6).
+ * Dashboards MCP tools on the existing Hauska MCP server (G-61 item 6 / G-62 item 5).
  * No second MCP process. No Product "dashboards". Not cortex-api.
+ * Compose is anonymous; city-pack stays identified-caller.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -93,6 +94,40 @@ export function registerDashboardsTools(server: McpServer): void {
       if (!gate.ok) return gate.content;
       try {
         return wrap(await dashboardsClient.getCityPack(cityKey));
+      } catch (err) {
+        return errorContent(describeFailure(tool, err));
+      }
+    },
+  );
+
+  server.tool(
+    "dashboards_compose_city_manager",
+    TOOL_COPY.dashboards_compose_city_manager,
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          /^\d{5}:[A-Za-z0-9._-]+$/,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48021:34137)",
+        )
+        .describe("Parcel node id, e.g. 48021:34137."),
+      city_key: z
+        .string()
+        .min(1)
+        .default("template-city")
+        .describe("City pack key. Default template-city. Not the live Bastrop city."),
+    },
+    async ({ parcel_node_id, city_key }) => {
+      const tool = "dashboards_compose_city_manager";
+      const gate = requireBackend(tool);
+      if (!gate.ok) return gate.content;
+      try {
+        return wrap(
+          await dashboardsClient.composeCityManager({
+            parcelNodeId: parcel_node_id,
+            cityKey: city_key,
+          }),
+        );
       } catch (err) {
         return errorContent(describeFailure(tool, err));
       }

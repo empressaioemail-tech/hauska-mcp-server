@@ -22,6 +22,8 @@ beforeEach(() => {
   delete process.env.DASHBOARDS_BACKEND_URL;
   delete process.env.DASHBOARDS_API_KEY;
   delete process.env.LEGACY_BACKEND_URL;
+  delete process.env.HAUSKA_ENGINE_API_KEY;
+  delete process.env.HAUSKA_RETRIEVAL_API_KEY;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
     calls.push({
@@ -40,6 +42,8 @@ afterEach(() => {
   delete process.env.DASHBOARDS_BACKEND_URL;
   delete process.env.DASHBOARDS_API_KEY;
   delete process.env.LEGACY_BACKEND_URL;
+  delete process.env.HAUSKA_ENGINE_API_KEY;
+  delete process.env.HAUSKA_RETRIEVAL_API_KEY;
 });
 
 test("DASHBOARDS_BACKEND_URL is required at call time", () => {
@@ -109,9 +113,73 @@ test("dashboards_get_city_pack is identified_caller not anonymous", () => {
   assert.ok(IDENTIFIED_CALLER_TOOLS.has("dashboards_get_city_pack"));
 });
 
+test("dashboards_compose_city_manager is public catalog anonymous_ok not identified_caller", () => {
+  const meta = toolGateMetadata("dashboards_compose_city_manager");
+  assert.equal(meta.product, "public");
+  assert.equal(meta.gate, "access_policy");
+  assert.equal(meta.anonymous_ok, true);
+  assert.notEqual(meta.gate, "identified_caller");
+  assert.equal(requiredProductForTool("dashboards_compose_city_manager"), undefined);
+  assert.ok(PUBLIC_CATALOG_TOOLS.has("dashboards_compose_city_manager"));
+  assert.equal(IDENTIFIED_CALLER_TOOLS.has("dashboards_compose_city_manager"), false);
+});
+
+test("composeCityManager hits compose URL with query string and default cityKey", async () => {
+  process.env.DASHBOARDS_BACKEND_URL = "https://dashboards.example.test";
+  await dashboardsClient.composeCityManager({ parcelNodeId: "48021:34137" });
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0]!.url,
+    "https://dashboards.example.test/api/lenses/city-manager/compose?parcelNodeId=48021:34137&cityKey=template-city",
+  );
+});
+
+test("composeCityManager omits Authorization even when DASHBOARDS_API_KEY is set", async () => {
+  process.env.DASHBOARDS_BACKEND_URL = "https://dashboards.example.test";
+  process.env.DASHBOARDS_API_KEY = "test-token";
+  process.env.HAUSKA_ENGINE_API_KEY = "engine-secret";
+  process.env.HAUSKA_RETRIEVAL_API_KEY = "retrieval-secret";
+  await dashboardsClient.composeCityManager({
+    parcelNodeId: "48021:34137",
+    cityKey: "template-city",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.auth, undefined);
+  assert.doesNotMatch(calls[0]!.url, /test-token|engine-secret|retrieval-secret/);
+});
+
+test("composeCityManager fails closed when DASHBOARDS_BACKEND_URL is unset", async () => {
+  await assert.rejects(
+    () => dashboardsClient.composeCityManager({ parcelNodeId: "48021:34137" }),
+    /DASHBOARDS_BACKEND_URL is required/,
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("composeCityManager refuses a forbidden backend URL", async () => {
+  process.env.DASHBOARDS_BACKEND_URL = "https://cortex-api-tds7av26va-uc.a.run.app";
+  await assert.rejects(
+    () => dashboardsClient.composeCityManager({ parcelNodeId: "48021:34137" }),
+    /refuses/,
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("composeCityManager rejects a parcelNodeId that fails the compose regex", () => {
+  process.env.DASHBOARDS_BACKEND_URL = "https://dashboards.example.test";
+  assert.throws(
+    () => {
+      void dashboardsClient.composeCityManager({ parcelNodeId: "48021:bad/id" });
+    },
+    /parcelNodeId must match/,
+  );
+  assert.equal(calls.length, 0);
+});
+
 test("dashboards tools are catalogued and are not a fifth Product", () => {
   assert.deepEqual([...PRODUCTS], ["public", "codex", "reporting", "map"]);
   assert.equal(PRODUCTS.includes("dashboards" as (typeof PRODUCTS)[number]), false);
   assert.ok(cataloguedToolNames().has("dashboards_list_lenses"));
   assert.ok(cataloguedToolNames().has("dashboards_get_city_pack"));
+  assert.ok(cataloguedToolNames().has("dashboards_compose_city_manager"));
 });

@@ -100,6 +100,7 @@ export const PUBLIC_CATALOG_TOOLS = new Set([
   "atom_trace",
   "dashboards_list_lenses",
   "dashboards_get_city_pack",
+  "dashboards_compose_city_manager",
 ]);
 
 /** Public-product tools that require an identified caller (not anonymous, not a product SKU). */
@@ -191,6 +192,15 @@ export function toolGateMetadata(name: string): ToolProductGate {
       gate: "access_policy",
       gate_summary:
         "Public lens catalog (definitions, not a tenant pack). Anonymous OK. Calls Dashboards HTTP. Not an atom read.",
+      anonymous_ok: true,
+    };
+  }
+  if (name === "dashboards_compose_city_manager") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Unauthenticated city-manager compose over G-13. Anonymous OK. Types omit public-paid. Calls Dashboards HTTP without DASHBOARDS_API_KEY. Not cortex-api. Not the live Bastrop city.",
       anonymous_ok: true,
     };
   }
