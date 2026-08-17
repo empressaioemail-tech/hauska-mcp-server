@@ -3,12 +3,14 @@
  * Calls the Dashboards product service, not cortex-api and not the live city.
  * Zero DSN. Does not read LEGACY_BACKEND_URL.
  * Compose and adapter-kinds are public: no DASHBOARDS_API_KEY.
+ * Private city packs forward X-Hauska-Key. template-city keeps the service Bearer.
  */
 
 import { LegacyHttpError, LegacyUnreachableError } from "./legacy-client.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_CITY_KEY = "template-city";
+export const TEMPLATE_CITY_KEY = "template-city";
+const DEFAULT_CITY_KEY = TEMPLATE_CITY_KEY;
 const COMPOSE_PARCEL_NODE_ID = /^\d{5}:[A-Za-z0-9._-]+$/;
 const FORBIDDEN =
   /cortex-api|legacy-design-tools|fancy-fire|smartcity-os-prod|tiny-art|smartcityos\.io|postgres:\/\/|neon\.tech/i;
@@ -32,17 +34,22 @@ function serviceToken(): string {
 
 async function dashboardsFetch<T>(
   path: string,
-  opts: { authorization: "service" | "omit" } = { authorization: "service" },
+  opts: {
+    authorization: "service" | "omit";
+    hauskaKey?: string;
+  } = { authorization: "service" },
 ): Promise<T> {
   const url = `${dashboardsBackendUrl()}${path}`;
   const headers: Record<string, string> = {
     accept: "application/json",
-    "user-agent": "hauska-mcp-server/g63",
+    "user-agent": "hauska-mcp-server/g11",
   };
   if (opts.authorization === "service") {
     const apiKey = serviceToken();
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
   }
+  const hauskaKey = opts.hauskaKey?.trim();
+  if (hauskaKey) headers["x-hauska-key"] = hauskaKey;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
@@ -75,9 +82,13 @@ export const dashboardsClient = {
       authorization: "omit",
     });
   },
-  getCityPack(cityKey: string) {
+  getCityPack(cityKey: string, opts?: { hauskaKey?: string }) {
+    const isTemplate = cityKey === TEMPLATE_CITY_KEY;
     return dashboardsFetch<Record<string, unknown>>(
       `/api/city-packs/${encodeURIComponent(cityKey)}`,
+      isTemplate
+        ? { authorization: "service" }
+        : { authorization: "omit", hauskaKey: opts?.hauskaKey },
     );
   },
   composeCityManager({

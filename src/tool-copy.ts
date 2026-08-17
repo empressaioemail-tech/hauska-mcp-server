@@ -250,8 +250,9 @@ export const TOOL_COPY = {
   dashboards_get_city_pack:
     "Fetch one Dashboards city pack by cityKey (tenant pack over the G-13 consumer contract). " +
     "Requires an authenticated API key. Anonymous callers are refused. " +
+    "A private pack requires jurisdiction_tenant equal to cityKey; wrong tenant is refused. " +
     "Calls GET /api/city-packs/{cityKey} on DASHBOARDS_BACKEND_URL. Not cortex-api. Not the live Bastrop city. " +
-    "Typical failures: auth_reject (missing key), unknown city pack, DASHBOARDS_BACKEND_URL unset.",
+    "Typical failures: auth_reject (missing key), wrong tenant, unknown city pack, DASHBOARDS_BACKEND_URL unset.",
 
   dashboards_compose_city_manager:
     "Unauthenticated city-manager compose over G-13. Types omit public-paid. " +

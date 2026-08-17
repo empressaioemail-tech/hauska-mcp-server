@@ -14,7 +14,7 @@ import {
   toolGateMetadata,
 } from "../src/product-gates.js";
 
-const calls: { url: string; auth?: string }[] = [];
+const calls: { url: string; auth?: string; hauskaKey?: string }[] = [];
 const realFetch = globalThis.fetch;
 
 beforeEach(() => {
@@ -29,6 +29,7 @@ beforeEach(() => {
     calls.push({
       url: String(input),
       auth: headers.get("authorization") ?? undefined,
+      hauskaKey: headers.get("x-hauska-key") ?? undefined,
     });
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
@@ -89,9 +90,27 @@ test("sends DASHBOARDS_API_KEY as Bearer", async () => {
   process.env.DASHBOARDS_API_KEY = "test-token";
   await dashboardsClient.getCityPack("template-city");
   assert.equal(calls[0]!.auth, "Bearer test-token");
+  assert.equal(calls[0]!.hauskaKey, undefined);
   assert.equal(
     calls[0]!.url,
     "https://dashboards.example.test/api/city-packs/template-city",
+  );
+});
+
+test("forwards X-Hauska-Key on a private pack and omits the service Bearer", async () => {
+  process.env.DASHBOARDS_BACKEND_URL = "https://dashboards.example.test";
+  process.env.DASHBOARDS_API_KEY = "test-token";
+  await dashboardsClient.getCityPack("fixture-city", {
+    hauskaKey: "hk_free_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  assert.equal(calls[0]!.auth, undefined);
+  assert.equal(
+    calls[0]!.hauskaKey,
+    "hk_free_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  );
+  assert.equal(
+    calls[0]!.url,
+    "https://dashboards.example.test/api/city-packs/fixture-city",
   );
 });
 
