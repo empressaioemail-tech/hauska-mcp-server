@@ -17,7 +17,7 @@
     "test:inspector": "npx @modelcontextprotocol/inspector http://localhost:3000/mcp"
   },
   "dependencies": {
-    "@empressaio/atom-contract": "^1.9.0",
+    "@empressaio/atom-contract": "^1.21.0",
     "@google-cloud/storage": "^7.14.0",
     "@hauska-sdk/metering": "^0.1.1",
     "@hauska/atom-contract": "^1.6.1",
