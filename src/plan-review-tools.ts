@@ -6,11 +6,19 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { buildEnvelope } from "./atom-shape.js";
+import {
+  buildEnvelope,
+  builtProvenance,
+  emptyProvenance,
+  makeProvenanceEntry,
+  type EnvelopeProvenance,
+} from "./atom-shape.js";
+import { ICC_ACTOR_DID, ICC_JURISDICTION_TENANT, ICC_SOURCE_ADAPTER } from "./icc-content.js";
 import { LegacyHttpError } from "./legacy-client.js";
 import { planReviewClient, planReviewBackendUrl } from "./plan-review-client.js";
 import { logToolRead } from "./read-attribution.js";
 import { getCurrentProduct, getCurrentTier } from "./request-context.js";
+import { listSourceObligationLedger } from "./source-obligation-meter.js";
 import { CODEX_TIER } from "./tool-copy.js";
 
 function envelopeContent(envelope: ReturnType<typeof buildEnvelope>) {
@@ -50,14 +58,83 @@ async function requireCodex(tool: string) {
   return { ok: true as const };
 }
 
-function wrap(tool: string, data: unknown) {
-  const env = buildEnvelope(data, [], {
+/**
+ * wrap requires an explicit provenance status. A bare [] is unrepresentable.
+ * Ledger B (source_obligation_ledger) is authoritative. Ledger A is a cache.
+ * This path accrues Ledger B via logToolRead; it does not write Ledger A.
+ */
+export function wrap(
+  tool: string,
+  data: unknown,
+  provenance: EnvelopeProvenance,
+) {
+  const env = buildEnvelope(data, provenance, {
     tier: getCurrentTier(),
-    readKind: "catalog",
+    readKind: provenance.status === "empty" ? "empty" : "catalog",
     note: "Served by plan-review Cloud Run. Not cortex-api. Calibration later.",
   });
   logToolRead({ tool, tier: getCurrentTier() }, env.atoms);
   return envelopeContent(env);
+}
+
+export function provenanceFromPlanReviewCode(
+  data: Record<string, unknown>,
+): EnvelopeProvenance {
+  if (data.status === "typed-absence") {
+    return emptyProvenance("no-atoms");
+  }
+  const book = typeof data.book === "string" ? data.book : "";
+  const section =
+    typeof data.section === "string"
+      ? data.section
+      : typeof data.sectionId === "string"
+        ? data.sectionId
+        : "";
+  const sectionAtomId =
+    typeof data.sectionAtomId === "string" ? data.sectionAtomId : "";
+  const isIccBook =
+    book.toUpperCase().includes("IBC") ||
+    book.toUpperCase().includes("IRC") ||
+    book.toUpperCase().includes("IFC") ||
+    book.toUpperCase().includes("IPMC") ||
+    Boolean(data.iccDeepLink);
+  if (!isIccBook) {
+    if (!sectionAtomId && !section) return emptyProvenance("no-atoms");
+    return builtProvenance([
+      makeProvenanceEntry({
+        did: sectionAtomId || `did:hauska:code-section:${book || "local"}/${section}`,
+        entityType: "code-section",
+        entityId: section || sectionAtomId,
+        jurisdictionTenant:
+          typeof data.jurisdictionTenant === "string"
+            ? data.jurisdictionTenant
+            : "bastrop-tx",
+        adapter: { status: "unmeasured" },
+        sourceActorDid: null,
+        sourceCitation: typeof data.citation === "string" ? data.citation : null,
+        iccSourced: false,
+        citedAtomDid: null,
+      }),
+    ]);
+  }
+  const did =
+    sectionAtomId ||
+    `did:hauska:code-section:${ICC_JURISDICTION_TENANT}/${book || "IBC"}/${section || "unknown"}`;
+  return builtProvenance([
+    makeProvenanceEntry({
+      did,
+      entityType: "code-section",
+      entityId: section || did,
+      jurisdictionTenant: ICC_JURISDICTION_TENANT,
+      adapter: { status: "known", value: ICC_SOURCE_ADAPTER },
+      url: typeof data.iccDeepLink === "string" ? data.iccDeepLink : null,
+      sectionNumber: section || null,
+      sourceActorDid: ICC_ACTOR_DID,
+      sourceCitation: typeof data.citation === "string" ? data.citation : null,
+      iccSourced: true,
+      citedAtomDid: null,
+    }),
+  ]);
 }
 
 export function registerPlanReviewTools(server: McpServer): void {
@@ -80,7 +157,7 @@ export function registerPlanReviewTools(server: McpServer): void {
       if (!gate.ok) return gate.content;
       try {
         if (args.engagement_id) {
-          return wrap(tool, await planReviewClient.matrix(args.engagement_id, source(tool)));
+          return wrap(tool, await planReviewClient.matrix(args.engagement_id, source(tool)), emptyProvenance("no-atoms"));
         }
         if (!args.parcel_node_id) {
           return errorContent(`${tool}: parcel_node_id or engagement_id is required`);
@@ -97,6 +174,7 @@ export function registerPlanReviewTools(server: McpServer): void {
             },
             source(tool),
           ),
+          emptyProvenance("no-atoms"),
         );
       } catch (err) {
         return errorContent(describeFailure(tool, err));
@@ -119,7 +197,7 @@ export function registerPlanReviewTools(server: McpServer): void {
         const findings = section_id
           ? await planReviewClient.findings(section_id, source(tool))
           : { findings: [] };
-        return wrap(tool, { queue, findings });
+        return wrap(tool, { queue, findings }, emptyProvenance("no-atoms"));
       } catch (err) {
         return errorContent(describeFailure(tool, err));
       }
@@ -160,6 +238,7 @@ export function registerPlanReviewTools(server: McpServer): void {
             },
             source(tool),
           ),
+          emptyProvenance("no-atoms"),
         );
       } catch (err) {
         return errorContent(describeFailure(tool, err));
@@ -182,6 +261,7 @@ export function registerPlanReviewTools(server: McpServer): void {
         return wrap(
           tool,
           await planReviewClient.briefing(engagement_id, section_atom_id, source(tool)),
+          emptyProvenance("no-atoms"),
         );
       } catch (err) {
         return errorContent(describeFailure(tool, err));
@@ -219,6 +299,7 @@ export function registerPlanReviewTools(server: McpServer): void {
             },
             source(tool),
           ),
+          emptyProvenance("no-atoms"),
         );
       } catch (err) {
         return errorContent(describeFailure(tool, err));
@@ -248,9 +329,10 @@ export function registerPlanReviewTools(server: McpServer): void {
               { orgId: args.org_id || "icc-demo", userId: args.user_id || "reviewer" },
               source(tool),
             ),
+            emptyProvenance("no-atoms"),
           );
         }
-        return wrap(tool, await planReviewClient.letter(args.engagement_id, source(tool)));
+        return wrap(tool, await planReviewClient.letter(args.engagement_id, source(tool)), emptyProvenance("no-atoms"));
       } catch (err) {
         return errorContent(describeFailure(tool, err));
       }
@@ -271,7 +353,8 @@ export function registerPlanReviewTools(server: McpServer): void {
       const gate = await requireCodex(tool);
       if (!gate.ok) return gate.content;
       try {
-        return wrap(tool, await planReviewClient.code(args, source(tool)));
+        const data = await planReviewClient.code(args, source(tool));
+        return wrap(tool, data, provenanceFromPlanReviewCode(data));
       } catch (err) {
         return errorContent(describeFailure(tool, err));
       }
@@ -294,7 +377,7 @@ export function registerPlanReviewTools(server: McpServer): void {
           engagement,
           e6Mounted: false,
           note: "Map compose is a clean hauska-map worktree on plan-review-app. MCP does not serve tiles.",
-        });
+        }, emptyProvenance("no-atoms"));
       } catch (err) {
         return errorContent(describeFailure(tool, err));
       }
@@ -312,12 +395,25 @@ export function registerPlanReviewTools(server: McpServer): void {
       const gate = await requireCodex(tool);
       if (!gate.ok) return gate.content;
       try {
+        const actorDid = actor_did || "did:hauska:actor:org:icc";
+        const cache = await planReviewClient.activity(actorDid, source(tool));
+        const authoritative = await listSourceObligationLedger({
+          sourceActorDid: actorDid,
+          limit: 200,
+        });
         return wrap(
           tool,
-          await planReviewClient.activity(
-            actor_did || "did:hauska:actor:org:icc",
-            source(tool),
-          ),
+          {
+            host: "hauska-mcp-server",
+            store: "source_obligation_ledger",
+            role: "authoritative",
+            cacheRole: "plan_review_activity",
+            actorDid,
+            cache,
+            rows: authoritative,
+            note: "source_obligation_ledger is authoritative. plan_review_activity is a cache that reconciles against it. This tool does not accrue.",
+          },
+          emptyProvenance("no-atoms"),
         );
       } catch (err) {
         return errorContent(describeFailure(tool, err));

@@ -39,6 +39,7 @@ import type { PropertyAtomChainData } from "./property-atom-chain.js";
 import type { ParcelTerrainExportToolData } from "./terrain-export-contract.js";
 import type { ParcelSitePlanExportToolData } from "./site-plan-export-contract.js";
 import type { ParcelDossierExportToolData } from "./dossier-export-contract.js";
+import { checkIccSearchPathAgreement } from "./icc-content.js";
 import { extractCitedAtomDid } from "./source-obligation-meter.js";
 import type {
   GetPlaceDossierResponse,
@@ -59,6 +60,11 @@ import type {
 
 export const ATTRIBUTION_STRING = "Powered by Hauska Engine — hauska.dev";
 
+const CID_NOTE =
+  "content_hash maps to CID at storage time per ADR-010; the retrieval API exposes content_hash directly.";
+
+export type AdapterStatus = "known" | "unmeasured";
+
 export interface AtomProvenanceEntry {
   did: string;
   entityType: string;
@@ -68,42 +74,162 @@ export interface AtomProvenanceEntry {
   cidNote: string;
   source: {
     adapter: string | null;
+    adapterStatus?: AdapterStatus;
     url: string | null;
     fetchedAt: string | null;
   };
   sectionNumber?: string | null;
   score?: number;
-  /** Licensed-source actor DID when corpus stamps it (I-K inbound meter). */
   sourceActorDid?: string | null;
   sourceCitation?: string | null;
-  /** Explicit ICC / licensed-source stamp when present on the atom body. */
   iccSourced?: boolean | null;
-  /** Setback cite of a code-section atom DID (sourceCodeAtomRef). */
   citedAtomDid?: string | null;
 }
 
-const CID_NOTE =
-  "content_hash maps to CID at storage time per ADR-010; the retrieval API exposes content_hash directly.";
+/**
+ * Discriminated provenance for buildEnvelope. A bare [] meant both
+ * "not built" and "genuinely no atoms". Those are different states.
+ */
+export type EnvelopeProvenance =
+  | { status: "built"; entries: readonly AtomProvenanceEntry[] }
+  | { status: "empty"; reason: "no-atoms" | "not-found" | "credential-pending" };
+
+export function builtProvenance(
+  entries: readonly AtomProvenanceEntry[],
+): EnvelopeProvenance {
+  return { status: "built", entries };
+}
+
+export function emptyProvenance(
+  reason: Extract<EnvelopeProvenance, { status: "empty" }>["reason"],
+): EnvelopeProvenance {
+  return { status: "empty", reason };
+}
+
+function entriesOf(provenance: EnvelopeProvenance): AtomProvenanceEntry[] {
+  return provenance.status === "built" ? [...provenance.entries] : [];
+}
+
+export type MakeProvenanceInput = {
+  did: string;
+  entityType: string;
+  entityId: string;
+  jurisdictionTenant: string;
+  contentHash?: string | null;
+  cidNote?: string;
+  adapter: { status: "known"; value: string } | { status: "unmeasured" };
+  url?: string | null;
+  fetchedAt?: string | null;
+  sectionNumber?: string | null;
+  score?: number;
+  sourceActorDid: string | null;
+  sourceCitation: string | null;
+  iccSourced: boolean | null;
+  citedAtomDid: string | null;
+};
+
+/** Shared constructor. ICC fields are required so a new builder cannot omit them. */
+/** Fill ICC fields and adapterStatus on a hand-built entry. Prefer makeProvenanceEntry for new code. */
+export function completeProvenance(
+  entry: {
+    did: string;
+    entityType: string;
+    entityId: string;
+    jurisdictionTenant: string;
+    contentHash: string | null;
+    cidNote?: string;
+    source: {
+      adapter: string | null;
+      adapterStatus?: AdapterStatus;
+      url: string | null;
+      fetchedAt: string | null;
+    };
+    sectionNumber?: string | null;
+    score?: number;
+    sourceActorDid?: string | null;
+    sourceCitation?: string | null;
+    iccSourced?: boolean | null;
+    citedAtomDid?: string | null;
+  },
+): AtomProvenanceEntry {
+  const adapterUnmeasured =
+    entry.source.adapterStatus === "unmeasured" ||
+    (entry.source.adapterStatus === undefined && entry.source.adapter == null);
+  return makeProvenanceEntry({
+    did: entry.did,
+    entityType: entry.entityType,
+    entityId: entry.entityId,
+    jurisdictionTenant: entry.jurisdictionTenant,
+    contentHash: entry.contentHash,
+    cidNote: entry.cidNote,
+    adapter: adapterUnmeasured
+      ? { status: "unmeasured" }
+      : { status: "known", value: entry.source.adapter as string },
+    url: entry.source.url,
+    fetchedAt: entry.source.fetchedAt,
+    sectionNumber: entry.sectionNumber,
+    score: entry.score,
+    sourceActorDid: entry.sourceActorDid ?? null,
+    sourceCitation: entry.sourceCitation ?? null,
+    iccSourced: entry.iccSourced ?? null,
+    citedAtomDid: entry.citedAtomDid ?? null,
+  });
+}
+
+export function makeProvenanceEntry(
+  input: MakeProvenanceInput,
+): AtomProvenanceEntry {
+  const adapterValue =
+    input.adapter.status === "known" ? input.adapter.value : null;
+  return {
+    did: input.did,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    jurisdictionTenant: input.jurisdictionTenant,
+    contentHash: input.contentHash ?? null,
+    cidNote: input.cidNote ?? CID_NOTE,
+    source: {
+      adapter: adapterValue,
+      adapterStatus: input.adapter.status,
+      url: input.url ?? null,
+      fetchedAt: input.fetchedAt ?? null,
+    },
+    sectionNumber: input.sectionNumber,
+    score: input.score,
+    sourceActorDid: input.sourceActorDid,
+    sourceCitation: input.sourceCitation,
+    iccSourced: input.iccSourced,
+    citedAtomDid: input.citedAtomDid,
+  };
+}
 
 /**
- * Build a provenance entry for a search result. Search results do not
- * carry the full atom body, so source-adapter and fetched-at are null
- * here — the caller should follow up with `get_atom` to retrieve them.
+ * Build a provenance entry for a search result. Search rows do not
+ * carry an adapter. That absence is unmeasured, not a measured null.
  */
 export function provenanceFromSearchResult(
   result: AtomSearchResult,
 ): AtomProvenanceEntry {
-  return {
+  return makeProvenanceEntry({
     did: result.atomDid,
     entityType: result.entityType,
     entityId: result.entityId,
     jurisdictionTenant: result.jurisdictionTenant,
     contentHash: null,
-    cidNote: CID_NOTE,
-    source: { adapter: null, url: null, fetchedAt: null },
+    adapter:
+      result.sourceAdapter === undefined || result.sourceAdapter === null
+        ? { status: "unmeasured" }
+        : { status: "known", value: result.sourceAdapter },
+    url: null,
+    fetchedAt: null,
     sectionNumber: result.sectionNumber,
     score: result.score,
-  };
+    sourceActorDid:
+      typeof result.sourceActorDid === "string" ? result.sourceActorDid : null,
+    sourceCitation: null,
+    iccSourced: null,
+    citedAtomDid: null,
+  });
 }
 
 /**
@@ -122,23 +248,20 @@ export function provenanceFromAtom(
     atom.iccSourced === true ||
     atom.sourceLicensor === "icc" ||
     atom.licensingStamp === "icc";
-  return {
+  return makeProvenanceEntry({
     did: `did:hauska:${atom.entityType}:${atom.entityId}`,
     entityType: atom.entityType,
     entityId: atom.entityId,
     jurisdictionTenant: atom.jurisdictionTenant,
     contentHash: atom.contentHash,
-    cidNote: CID_NOTE,
-    source: {
-      adapter: atom.sourceAdapter,
-      url: atom.sourceUrl,
-      fetchedAt: atom.fetchedAt,
-    },
+    adapter: { status: "known", value: atom.sourceAdapter },
+    url: atom.sourceUrl,
+    fetchedAt: atom.fetchedAt,
     sourceActorDid,
     sourceCitation,
     iccSourced: iccSourced || null,
     citedAtomDid: extractCitedAtomDid(atom),
-  };
+  });
 }
 
 /**
@@ -177,9 +300,10 @@ function defaultReadKind(atomCount: number): ReadContractKind {
 
 export function buildEnvelope<T>(
   data: T,
-  atoms: AtomProvenanceEntry[],
+  provenance: EnvelopeProvenance,
   options: BuildEnvelopeOptions,
 ): ToolEnvelope<T> {
+  const atoms = entriesOf(provenance);
   const meta: ToolEnvelope<T>["meta"] = {};
   if (isFreeTier(options.tier)) meta.attribution = ATTRIBUTION_STRING;
   if (options.note) meta.note = options.note;
@@ -200,13 +324,28 @@ export function searchAtomsEnvelope(
   response: SearchResponse,
   options: BuildEnvelopeOptions,
 ): ToolEnvelope<SearchResponse> {
-  const atoms = response.results.map(provenanceFromSearchResult);
+  const atoms = response.results.map((r) => {
+    const entry = provenanceFromSearchResult(r);
+    checkIccSearchPathAgreement({
+      tool: "search_atoms",
+      jurisdictionTenant: r.jurisdictionTenant,
+      sourceAdapter: r.sourceAdapter,
+      provenance: {
+        did: entry.did,
+        jurisdictionTenant: entry.jurisdictionTenant,
+        sourceAdapter: entry.source.adapter,
+        adapterStatus: entry.source.adapterStatus,
+        sourceActorDid: entry.sourceActorDid,
+      },
+    });
+    return entry;
+  });
   const scores = response.results.map((r) => r.score).filter((s) => s > 0);
   const avgScore =
     scores.length > 0
       ? scores.reduce((a, b) => a + b, 0) / scores.length
       : undefined;
-  return buildEnvelope(response, atoms, {
+  return buildEnvelope(response, builtProvenance(atoms), {
     ...options,
     readKind: "catalog",
     avgScore,
@@ -224,7 +363,7 @@ export function getAtomEnvelope(
       if (edge.atom) atoms.push(provenanceFromAtom(edge.atom));
     }
   }
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 export function propertyAtomChainEnvelope(
@@ -239,7 +378,7 @@ export function propertyAtomChainEnvelope(
       : atoms.length > 0
         ? "catalog"
         : "empty";
-  return buildEnvelope(data, atoms, { ...options, readKind });
+  return buildEnvelope(data, builtProvenance(atoms), { ...options, readKind });
 }
 
 export function parcelTerrainExportEnvelope(
@@ -261,7 +400,7 @@ export function parcelTerrainExportEnvelope(
       ? atom.jurisdictionTenant
       : "property-spine";
   const atoms: AtomProvenanceEntry[] = [
-    {
+    completeProvenance({
       did,
       entityType: "parcel-terrain-model",
       entityId: data.parcelNodeId,
@@ -280,9 +419,15 @@ export function parcelTerrainExportEnvelope(
             : "https://elevation.nationalmap.gov/3dep",
         fetchedAt,
       },
-    },
+      sourceActorDid:
+        typeof atom.sourceActorDid === "string" ? atom.sourceActorDid : null,
+      sourceCitation:
+        typeof atom.sourceCitation === "string" ? atom.sourceCitation : null,
+      iccSourced: atom.iccSourced === true ? true : null,
+      citedAtomDid: extractCitedAtomDid(atom),
+    }),
   ];
-  return buildEnvelope(data, atoms, { ...options, readKind: "catalog" });
+  return buildEnvelope(data, builtProvenance(atoms), { ...options, readKind: "catalog" });
 }
 
 export function parcelSitePlanExportEnvelope(
@@ -327,7 +472,7 @@ export function parcelSitePlanExportEnvelope(
       },
     },
   ];
-  return buildEnvelope(data, atoms, { ...options, readKind: "catalog" });
+  return buildEnvelope(data, builtProvenance(atoms), { ...options, readKind: "catalog" });
 }
 
 export function parcelDossierExportEnvelope(
@@ -373,7 +518,7 @@ export function parcelDossierExportEnvelope(
       },
     },
   ];
-  return buildEnvelope(data, atoms, { ...options, readKind: "catalog" });
+  return buildEnvelope(data, builtProvenance(atoms), { ...options, readKind: "catalog" });
 }
 
 export function atomTraceEnvelope(
@@ -381,7 +526,7 @@ export function atomTraceEnvelope(
   options: BuildEnvelopeOptions,
 ): ToolEnvelope<import("./hauska-client.js").AtomTraceResponse | null> {
   if (!trace) {
-    return buildEnvelope(null, [], {
+    return buildEnvelope(null, emptyProvenance("not-found"), {
       ...options,
       readKind: "empty",
       note: "No trace found for atom DID.",
@@ -391,7 +536,7 @@ export function atomTraceEnvelope(
   for (const edge of [...trace.outbound, ...trace.inbound]) {
     if (edge.atom) atoms.push(provenanceFromAtom(edge.atom));
   }
-  return buildEnvelope(trace, atoms, {
+  return buildEnvelope(trace, builtProvenance(atoms), {
     ...options,
     readKind: "catalog",
   });
@@ -418,7 +563,7 @@ export function listJurisdictionsEnvelope(
       cidNote: CID_NOTE,
       source: { adapter: null, url: null, fetchedAt: j.lastRefreshedAt },
     }));
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 export function queryJurisdictionEnvelope(
@@ -447,7 +592,7 @@ export function queryJurisdictionEnvelope(
   if (response.permitAtoms) {
     for (const p of response.permitAtoms) atoms.push(provenanceFromSearchResult(p));
   }
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 export function searchPermitAtomsEnvelope(
@@ -520,7 +665,7 @@ export function codexEnvelope<T>(
       : Array.isArray(provenance)
         ? [...provenance]
         : [provenance as AtomProvenanceEntry];
-  return buildEnvelope(data, atoms, {
+  return buildEnvelope(data, builtProvenance(atoms), {
     ...options,
     readKind: options.readKind ?? "legacy-deterministic",
   });
@@ -599,7 +744,7 @@ export function listPropertyWorkspacesEnvelope(
   const atoms = response.workspaces.flatMap((workspace) =>
     (workspace.evidenceRefs ?? []).map(provenanceFromWorkspaceEvidence),
   );
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 export function getPropertyWorkspaceEnvelope(
@@ -608,7 +753,7 @@ export function getPropertyWorkspaceEnvelope(
 ): ToolEnvelope<GetPropertyWorkspaceResponse> {
   const atoms =
     response.workspace?.evidenceRefs?.map(provenanceFromWorkspaceEvidence) ?? [];
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 export function listWorkspaceShareEdgesEnvelope(
@@ -618,14 +763,14 @@ export function listWorkspaceShareEdgesEnvelope(
   const atoms = response.edges.flatMap((edge) =>
     (edge.evidenceRefs ?? []).map(provenanceFromWorkspaceEvidence),
   );
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 export function resolvePlaceEnvelope(
   response: ResolvePlaceResponse,
   options: BuildEnvelopeOptions,
 ): ToolEnvelope<ResolvePlaceResponse> {
-  return buildEnvelope(response, [], { ...options, readKind: "empty" });
+  return buildEnvelope(response, emptyProvenance("no-atoms"), { ...options, readKind: "empty" });
 }
 
 export function getPlaceLayersEnvelope(
@@ -647,7 +792,7 @@ export function getPlaceLayersEnvelope(
         fetchedAt: l.asOf ?? null,
       },
     }));
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 export function getPlaceDossierEnvelope(
@@ -693,7 +838,7 @@ export function getPlaceDossierEnvelope(
       });
     }
   }
-  return buildEnvelope(response, atoms, {
+  return buildEnvelope(response, builtProvenance(atoms), {
     ...options,
     readKind: atoms.length > 0 ? "legacy-deterministic" : "empty",
   });
@@ -755,7 +900,7 @@ export function generateBriefEnvelope(
   for (const ref of response.atoms?.inlineRefs ?? []) {
     atoms.push(provenanceFromBriefInlineRef(ref, fetchedAt, jurisdiction));
   }
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 export function getBriefRunEnvelope(
@@ -794,7 +939,7 @@ export function siteDrainageEnvelope(
           },
         ]
       : [];
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 export function siteTopographyEnvelope(
@@ -822,7 +967,7 @@ export function siteTopographyEnvelope(
           },
         ]
       : [];
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 /**
@@ -930,7 +1075,7 @@ export function parcelTerrainModelEnvelope(
         },
       ]
     : [];
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 // -----------------------------------------------------------------
@@ -983,7 +1128,7 @@ export function encumbrancesEnvelope(
       },
     });
   }
-  return buildEnvelope(response, atoms, options);
+  return buildEnvelope(response, builtProvenance(atoms), options);
 }
 
 export function restrictionsEnvelope(
@@ -1019,7 +1164,7 @@ export function restrictionsEnvelope(
       },
     };
   });
-  return buildEnvelope(projection, atoms, options);
+  return buildEnvelope(projection, builtProvenance(atoms), options);
 }
 
 // -----------------------------------------------------------------
@@ -1030,7 +1175,7 @@ export function credentialPendingEnvelope(
   response: CredentialPendingResponse,
   options: BuildEnvelopeOptions,
 ): ToolEnvelope<CredentialPendingResponse> {
-  return buildEnvelope(response, [], {
+  return buildEnvelope(response, emptyProvenance("credential-pending"), {
     ...options,
     readKind: "empty",
     note: response.message,

@@ -7,9 +7,11 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
+import * as atomShape from "../src/atom-shape.js";
 import {
   ATTRIBUTION_STRING,
   buildEnvelope,
+  emptyProvenance,
   getAtomEnvelope,
   getPropertyWorkspaceEnvelope,
   listJurisdictionsEnvelope,
@@ -68,6 +70,7 @@ test("provenanceFromSearchResult surfaces DID, entity type, jurisdiction, sectio
   assert.equal(p.sectionNumber, "5.04");
   assert.equal(p.contentHash, null, "search results carry no content hash");
   assert.equal(p.source.adapter, null);
+  assert.equal(p.source.adapterStatus, "unmeasured");
 });
 
 test("provenanceFromAtom surfaces DID, content hash, source adapter, source URL, fetched-at", () => {
@@ -80,20 +83,20 @@ test("provenanceFromAtom surfaces DID, content hash, source adapter, source URL,
 });
 
 test("buildEnvelope attaches readContract on every envelope", () => {
-  const env = buildEnvelope({ ok: true }, [], { tier: "free_anonymous" });
+  const env = buildEnvelope({ ok: true }, emptyProvenance("no-atoms"), { tier: "free_anonymous" });
   assert.ok(env.readContract);
   assert.equal(typeof env.readContract.assembledAt, "string");
   assert.equal(typeof env.readContract.axes.calibratedConfidence.n, "number");
 });
 
 test("buildEnvelope attaches attribution for free_anonymous tier", () => {
-  const env = buildEnvelope({ x: 1 }, [], { tier: "free_anonymous" });
+  const env = buildEnvelope({ x: 1 }, emptyProvenance("no-atoms"), { tier: "free_anonymous" });
   assert.equal(env.meta.attribution, ATTRIBUTION_STRING);
   assert.match(env.meta.attribution!, /—/, "attribution string must contain an em dash");
 });
 
 test("buildEnvelope attaches attribution for free tier (authed free key)", () => {
-  const env = buildEnvelope({ x: 1 }, [], { tier: "free" });
+  const env = buildEnvelope({ x: 1 }, emptyProvenance("no-atoms"), { tier: "free" });
   assert.equal(env.meta.attribution, ATTRIBUTION_STRING);
 });
 
@@ -101,7 +104,7 @@ test("buildEnvelope attaches attribution for developer_pro and team", () => {
   // Per 50 §Free-tier-attribution: lower paid tiers retain the
   // attribution requirement. Only Embedder strips it.
   for (const tier of ["developer_pro", "team"] as const) {
-    const env = buildEnvelope({ x: 1 }, [], { tier });
+    const env = buildEnvelope({ x: 1 }, emptyProvenance("no-atoms"), { tier });
     assert.equal(
       env.meta.attribution,
       undefined,
@@ -111,7 +114,7 @@ test("buildEnvelope attaches attribution for developer_pro and team", () => {
 });
 
 test("buildEnvelope strips attribution for embedder tier", () => {
-  const env = buildEnvelope({ x: 1 }, [], { tier: "embedder" });
+  const env = buildEnvelope({ x: 1 }, emptyProvenance("no-atoms"), { tier: "embedder" });
   assert.equal(env.meta.attribution, undefined);
 });
 
@@ -277,4 +280,70 @@ test("listWorkspaceShareEdgesEnvelope maps edge evidence refs", () => {
   assert.equal(env.atoms.length, 1);
   assert.equal(env.atoms[0]!.did, "legacy:evidence:share_evt_1");
   assert.equal(env.atoms[0]!.entityType, "share-edge");
+});
+
+const ENVELOPE_HARNESS: Record<
+  string,
+  () => { sourceActorDid: string | null | undefined } | null
+> = {
+  searchAtomsEnvelope: () =>
+    searchAtomsEnvelope(
+      {
+        results: [
+          {
+            ...SEARCH_RESULT,
+            jurisdictionTenant: "icc-model-code",
+            sourceActorDid: "did:hauska:actor:org:icc",
+          },
+        ],
+        totalCandidates: 1,
+      },
+      { tier: "developer_pro" },
+    ).atoms[0] ?? null,
+  getAtomEnvelope: () =>
+    getAtomEnvelope(
+      {
+        atom: { ...FULL_ATOM, sourceActorDid: "did:hauska:actor:org:icc" },
+        composition: [],
+      },
+      { tier: "developer_pro" },
+    ).atoms[0] ?? null,
+  searchPermitAtomsEnvelope: () => null,
+  queryJurisdictionEnvelope: () => null,
+  listJurisdictionsEnvelope: () => null,
+  listPropertyWorkspacesEnvelope: () => null,
+  getPropertyWorkspaceEnvelope: () => null,
+  listWorkspaceShareEdgesEnvelope: () => null,
+  propertyAtomChainEnvelope: () => null,
+  parcelTerrainExportEnvelope: () => null,
+  parcelSitePlanExportEnvelope: () => null,
+  parcelDossierExportEnvelope: () => null,
+  atomTraceEnvelope: () => null,
+  resolvePlaceEnvelope: () => null,
+  getPlaceLayersEnvelope: () => null,
+  getPlaceDossierEnvelope: () => null,
+  generateBriefEnvelope: () => null,
+  getBriefRunEnvelope: () => null,
+  siteDrainageEnvelope: () => null,
+  siteTopographyEnvelope: () => null,
+  parcelTerrainModelEnvelope: () => null,
+  encumbrancesEnvelope: () => null,
+  restrictionsEnvelope: () => null,
+  credentialPendingEnvelope: () => null,
+  codexEnvelope: () => null,
+};
+
+test("every exported *Envelope is registered so a 27th builder fails this test", () => {
+  const exported = Object.keys(atomShape)
+    .filter((k) => k.endsWith("Envelope") && k !== "buildEnvelope")
+    .sort();
+  const registered = Object.keys(ENVELOPE_HARNESS).sort();
+  assert.deepEqual(exported, registered);
+});
+
+test("builders that receive sourceActorDid on input emit it", () => {
+  const search = ENVELOPE_HARNESS.searchAtomsEnvelope();
+  assert.equal(search?.sourceActorDid, "did:hauska:actor:org:icc");
+  const atom = ENVELOPE_HARNESS.getAtomEnvelope();
+  assert.equal(atom?.sourceActorDid, "did:hauska:actor:org:icc");
 });

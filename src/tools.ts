@@ -45,6 +45,9 @@ import {
   parcelTerrainModelEnvelope,
   normalizeTerrainConfidence,
   buildEnvelope,
+  builtProvenance,
+  completeProvenance,
+  emptyProvenance,
   type ToolEnvelope,
 } from "./atom-shape.js";
 import { assembleDownloadableAtomExport } from "./atom-export.js";
@@ -445,6 +448,7 @@ export function registerTools(server: McpServer) {
           (r) => ({
             accessPolicy: r.accessPolicy,
             jurisdictionTenant: r.jurisdictionTenant,
+            sourceAdapter: r.sourceAdapter,
           }),
           { tool: "search_atoms" },
         );
@@ -1153,8 +1157,8 @@ export function registerTools(server: McpServer) {
           tool,
           buildEnvelope(
             data,
-            [
-              {
+            builtProvenance([
+              completeProvenance({
                 did: `did:hauska:site-plan-export:${parcel_node_id}:${format}`,
                 entityType: "parcel-site-plan-export-artifact",
                 entityId: parcel_node_id,
@@ -1167,8 +1171,8 @@ export function registerTools(server: McpServer) {
                   url: sitePlanExportDownloadPath(parcel_node_id, format),
                   fetchedAt: new Date().toISOString(),
                 },
-              },
-            ],
+              }),
+            ]),
             { tier, readKind: "catalog" },
           ),
           "public-paid",
@@ -1575,8 +1579,8 @@ export function registerTools(server: McpServer) {
           tool,
           buildEnvelope(
             data,
-            [
-              {
+            builtProvenance([
+              completeProvenance({
                 did: `did:hauska:dossier-export:${parcel_node_id}:pdf-dossier`,
                 entityType: "parcel-site-plan-export-artifact",
                 entityId: parcel_node_id,
@@ -1589,8 +1593,8 @@ export function registerTools(server: McpServer) {
                   url: dossierExportDownloadPath(parcel_node_id),
                   fetchedAt: new Date().toISOString(),
                 },
-              },
-            ],
+              }),
+            ]),
             { tier, readKind: "catalog" },
           ),
           "public-paid",
@@ -1732,8 +1736,8 @@ export function registerTools(server: McpServer) {
           tool,
           buildEnvelope(
             data,
-            [
-              {
+            builtProvenance([
+              completeProvenance({
                 did: `did:hauska:terrain-export:${parcel_node_id}:${format}`,
                 entityType: "parcel-terrain-export-artifact",
                 entityId: parcel_node_id,
@@ -1746,8 +1750,8 @@ export function registerTools(server: McpServer) {
                   url: terrainExportDownloadPath(parcel_node_id, format),
                   fetchedAt: new Date().toISOString(),
                 },
-              },
-            ],
+              }),
+            ]),
             { tier, readKind: "catalog" },
           ),
           "public-paid",
@@ -1872,6 +1876,7 @@ export function registerTools(server: McpServer) {
               (r) => ({
                 accessPolicy: r.accessPolicy,
                 jurisdictionTenant: r.jurisdictionTenant,
+                sourceAdapter: r.sourceAdapter,
               }),
               { tool: "query_jurisdiction" },
             )
@@ -1934,6 +1939,7 @@ export function registerTools(server: McpServer) {
               (r) => ({
                 accessPolicy: r.accessPolicy,
                 jurisdictionTenant: r.jurisdictionTenant,
+                sourceAdapter: r.sourceAdapter,
               }),
               { tool: "search_permit_atoms" },
             )
@@ -4247,8 +4253,8 @@ export function registerTools(server: McpServer) {
               content_type: download.contentType,
               byte_length: download.bytes.byteLength,
             },
-            [
-              {
+            builtProvenance([
+              completeProvenance({
                 did: `did:hauska:deliverable-letter-render:${render_id}`,
                 entityType: "deliverable-letter-render",
                 entityId: render_id,
@@ -4261,8 +4267,8 @@ export function registerTools(server: McpServer) {
                   url: "/api/engagements/deliverable-letters/renders/download",
                   fetchedAt: new Date().toISOString(),
                 },
-              },
-            ],
+              }),
+            ]),
             { tier, readKind: "legacy-deterministic" },
           ),
         );
@@ -4961,7 +4967,7 @@ export function registerTools(server: McpServer) {
         if (!scopeCheck.ok) return errorContent(scopeCheck.message);
         const __readEnv = finalizeReadEnvelope(
           "assemble_map_layers",
-          buildEnvelope(engineEnvelope.payload, [], {
+          buildEnvelope(engineEnvelope.payload, emptyProvenance("no-atoms"), {
             tier,
             readKind: "catalog",
           }),
@@ -5049,7 +5055,7 @@ export function registerTools(server: McpServer) {
         }
         const __readEnv = buildEnvelope(
           { export: outcome.export },
-          readEnv.atoms,
+          builtProvenance(readEnv.atoms),
           { tier, readKind: "catalog" },
         );
         logToolRead({
@@ -5124,7 +5130,7 @@ export function registerTools(server: McpServer) {
               readContract,
               overlay_available: overlayReadContract !== undefined,
             },
-            base.atoms,
+            builtProvenance(base.atoms),
             {
               tier,
               readKind: overlayReadContract ? "model-assisted" : "catalog",

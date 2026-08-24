@@ -10,6 +10,7 @@ import { validateAtomConformance, ATOM_CONFORMANCE_TARGET_VERSION } from "@empre
 
 import {
   buildEnvelope,
+  emptyProvenance,
   codexEnvelope,
   getAtomEnvelope,
   listJurisdictionsEnvelope,
@@ -106,7 +107,7 @@ test("catalog envelope builders attach conformance-valid readContract (1.5.0)", 
     searchAtomsEnvelope({ results: [SEARCH_RESULT] }, { tier: "free_anonymous" }),
     getAtomEnvelope({ atom: null, composition: [] }, { tier: "free" }),
     listJurisdictionsEnvelope({ jurisdictions: [JUR] }, { tier: "developer_pro" }),
-    buildEnvelope({ ok: true }, [], { tier: "embedder", readKind: "empty" }),
+    buildEnvelope({ ok: true }, emptyProvenance("no-atoms"), { tier: "embedder", readKind: "empty" }),
     codexEnvelope({ findings: [] }, [], { tier: "developer_pro", readKind: "legacy-deterministic" }),
   ]) {
     const conformance = validateAtomConformance({

@@ -7,7 +7,7 @@
 -- Demo placeholder: DEMO_CENTS_PER_ATOM (0.01 USD per atom returned per query).
 
 -- ---------------------------------------------------------------------
--- View: per-query ICC content meter (would-charge, never billed)
+-- View: per-query ICC content meter (would-charge, never a payment record)
 -- ---------------------------------------------------------------------
 WITH params AS (
   SELECT

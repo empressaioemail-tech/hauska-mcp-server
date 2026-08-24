@@ -7,8 +7,16 @@
 import type { AccessPolicy } from "@empressaio/atom-contract";
 
 import type { AuthContext } from "./auth.js";
+import {
+  ICC_JURISDICTION_TENANT,
+  ICC_SOURCE_ADAPTER,
+  identityFromAccessTarget,
+  isIccContent,
+} from "./icc-content.js";
 import { logger } from "./logger.js";
 import type { Tier } from "./tiers.js";
+
+export { ICC_JURISDICTION_TENANT, ICC_SOURCE_ADAPTER };
 
 /**
  * Access policy enforced at the MCP gate. Equal to the contract union:
@@ -30,16 +38,12 @@ export interface AccessTarget {
   jurisdictionTenant: string;
   sharedWithTenants?: ReadonlyArray<string>;
   sourceAdapter?: string;
+  sourceActorDid?: string;
 }
 
 /** ICC catalog tenant. Store rows may still say public-free until L26 releases the atoms slot (G-60 A-028). */
-export const ICC_JURISDICTION_TENANT = "icc-model-code";
-export const ICC_SOURCE_ADAPTER = "icc-code-connect";
-
 export function isIccCatalogTarget(target: AccessTarget): boolean {
-  if (target.jurisdictionTenant === ICC_JURISDICTION_TENANT) return true;
-  if (target.sourceAdapter === ICC_SOURCE_ADAPTER) return true;
-  return false;
+  return isIccContent(identityFromAccessTarget(target));
 }
 
 function isPublicCatalogCaller(subject: AccessSubject): boolean {

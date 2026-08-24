@@ -32,7 +32,7 @@ export function recordLayer2Call(params: Layer2CallParams): void {
       try {
         await getPool().query(
           `INSERT INTO metering_events
-             (key_id, key_hash, product, tier, tool, request_id, billed)
+             (key_id, key_hash, product, tier, tool, request_id, authorized)
            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [keyId, keyHash, product, tier, tool, requestId, false],
         );
@@ -51,7 +51,7 @@ export function recordLayer2Call(params: Layer2CallParams): void {
         tier,
         tool,
         request_id: requestId,
-        billed: false,
+        authorized: false,
         money_path: "observability_only",
       });
     } catch (err) {

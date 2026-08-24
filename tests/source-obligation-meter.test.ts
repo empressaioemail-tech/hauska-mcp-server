@@ -242,3 +242,148 @@ test("source-obligation-meter has no static @hauska-sdk import", () => {
   const earlyReturnAt = attribution.indexOf("isSdkMeteringEnabled()");
   assert.ok(accrueAt > 0 && earlyReturnAt > accrueAt);
 });
+
+import { isIccCatalogTarget } from "../src/access-policy.js";
+import { provenanceFromSearchResult } from "../src/atom-shape.js";
+import {
+  ICC_JURISDICTION_TENANT,
+  isIccContent,
+  identityFromHint,
+} from "../src/icc-content.js";
+
+test("tenant-only ICC search hit accrues one row (live search-path defect)", async () => {
+  setSourceObligationInsertForTests(async () => {});
+  try {
+    const entry = provenanceFromSearchResult({
+      atomDid: "did:hauska:code-section:icc-model-code/IBC2018/1003.1",
+      entityType: "code-section",
+      entityId: "icc-model-code/IBC2018/1003.1",
+      jurisdictionTenant: ICC_JURISDICTION_TENANT,
+      sectionNumber: "1003.1",
+      snippet: "Egress.",
+      score: 0.9,
+    });
+    assert.equal(entry.source.adapter, null);
+    assert.equal(entry.source.adapterStatus, "unmeasured");
+    assert.equal(entry.sourceActorDid, null);
+    assert.equal(
+      isIccCatalogTarget({
+        jurisdictionTenant: ICC_JURISDICTION_TENANT,
+        sourceAdapter: undefined,
+      }),
+      true,
+    );
+    accrueSourceObligations({
+      tool: "search_atoms",
+      product: "codex",
+      tier: "developer_pro",
+      requestId: "req-search-icc-tenant",
+      atoms: [entry],
+    });
+    await sleep(30);
+    const rows = getSourceObligationTestCaptures();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.sourceActorDid, ICC_ACTOR_DID);
+  } finally {
+    setSourceObligationInsertForTests(null);
+  }
+});
+
+test("gate and meter agree across tenant x adapter x actor cells", () => {
+  const tenants = [ICC_JURISDICTION_TENANT, "bastrop-tx", null] as const;
+  const adapters = ["icc-code-connect", "municode-html", null] as const;
+  const actors = [ICC_ACTOR_DID, null] as const;
+  let cells = 0;
+  for (const tenant of tenants) {
+    for (const adapter of adapters) {
+      for (const actor of actors) {
+        cells += 1;
+        const gate = isIccCatalogTarget({
+          jurisdictionTenant: tenant ?? "",
+          sourceAdapter: adapter ?? undefined,
+          sourceActorDid: actor ?? undefined,
+        });
+        const meter =
+          resolveSourceActorDid({
+            did: "did:hauska:code-section:cell/1",
+            jurisdictionTenant: tenant,
+            sourceAdapter: adapter,
+            adapterStatus: adapter == null ? "unmeasured" : "known",
+            sourceActorDid: actor,
+          }) === ICC_ACTOR_DID;
+        assert.equal(
+          gate,
+          meter,
+          `disagree tenant=${tenant} adapter=${adapter} actor=${actor} gate=${gate} meter=${meter}`,
+        );
+        const unified = isIccContent(
+          identityFromHint({
+            did: "did:hauska:code-section:cell/1",
+            jurisdictionTenant: tenant,
+            sourceAdapter: adapter,
+            adapterStatus: adapter == null ? "unmeasured" : "known",
+            sourceActorDid: actor,
+          }),
+        );
+        assert.equal(unified, gate);
+        assert.equal(unified, meter);
+      }
+    }
+  }
+  assert.equal(cells, 18);
+});
+
+test("ledger reader returns captured rows (reader is armed)", async () => {
+  const stored: Array<{ sourceActorDid: string; atomDid: string; requestId: string }> =
+    [];
+  setSourceObligationInsertForTests(async (row) => {
+    stored.push({
+      sourceActorDid: row.sourceActorDid,
+      atomDid: row.atomDid,
+      requestId: row.requestId,
+    });
+  });
+  const { setSourceObligationSelectForTests, listSourceObligationLedger } =
+    await import("../src/source-obligation-meter.js");
+  setSourceObligationSelectForTests(async (opts) =>
+    stored
+      .filter((r) => !opts.requestId || r.requestId === opts.requestId)
+      .map((r, i) => ({
+        id: i + 1,
+        createdAt: "2026-08-24T00:00:00.000Z",
+        sourceActorDid: r.sourceActorDid,
+        atomDid: r.atomDid,
+        tool: "search_atoms",
+        product: "codex",
+        tier: "developer_pro",
+        requestId: r.requestId,
+        obligationType: "license-reference-royalty",
+        amountMinor: null,
+        currency: null,
+        graceTerms: "pending-rate",
+        note: "icc-inbound-reference",
+      })),
+  );
+  try {
+    accrueSourceObligations({
+      tool: "search_atoms",
+      product: "codex",
+      tier: "developer_pro",
+      requestId: "req-ledger-read",
+      atoms: [
+        {
+          did: "did:hauska:code-section:icc-model-code/x",
+          jurisdictionTenant: ICC_JURISDICTION_TENANT,
+        },
+      ],
+    });
+    await sleep(30);
+    const read = await listSourceObligationLedger({ requestId: "req-ledger-read" });
+    assert.equal(read.length, 1);
+    assert.equal(read[0]?.sourceActorDid, ICC_ACTOR_DID);
+    assert.equal(read[0]?.requestId, "req-ledger-read");
+  } finally {
+    setSourceObligationInsertForTests(null);
+    setSourceObligationSelectForTests(null);
+  }
+});

@@ -64,6 +64,12 @@ export interface AtomSearchResult {
   score: number;
   /** ADR-017 access tier when the engine surfaces it on search rows. */
   accessPolicy?: AccessPolicy;
+  /**
+   * Engine search does not project this today. When absent the provenance
+   * marks adapter unmeasured rather than emitting a measured null.
+   */
+  sourceAdapter?: string;
+  sourceActorDid?: string;
 }
 
 export interface SearchResponse {

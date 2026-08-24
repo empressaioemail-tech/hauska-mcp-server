@@ -7,7 +7,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { buildEnvelope } from "./atom-shape.js";
+import { buildEnvelope, emptyProvenance } from "./atom-shape.js";
 import {
   dashboardsBackendUrl,
   dashboardsClient,
@@ -68,7 +68,7 @@ function requirePackTenant(tool: string, cityKey: string) {
 
 function wrap(data: unknown) {
   return envelopeContent(
-    buildEnvelope(data, [], {
+    buildEnvelope(data, emptyProvenance("no-atoms"), {
       tier: getCurrentTier(),
       readKind: "catalog",
       note: "Served by Dashboards product HTTP. Not cortex-api. Not the live Bastrop city.",

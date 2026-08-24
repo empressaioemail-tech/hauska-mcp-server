@@ -14,31 +14,21 @@ import {
 } from "@empressaio/atom-contract/reasoning";
 
 import { getPool } from "./db.js";
+import {
+  ICC_ACTOR_DID,
+  ICC_SOURCED_ATOM_DID_ALLOWLIST,
+  identityFromHint,
+  isIccContent,
+} from "./icc-content.js";
 import { logger } from "./logger.js";
 import type { AtomProvenanceEntry } from "./atom-shape.js";
 import type { Product } from "./products.js";
 
-/** ICC licensed-source actor DID from shipped contract fixture. */
-export const ICC_ACTOR_DID = ICC_ACTOR_RECORD_FIXTURE.actorId;
+export { ICC_ACTOR_DID, ICC_SOURCED_ATOM_DID_ALLOWLIST };
 
 /** Fixture obligation shape (license-reference-royalty + owedToActorDid). */
 export const ICC_LICENSE_REFERENCE_OBLIGATION =
   ICC_LICENSE_REFERENCE_OBLIGATION_FIXTURE;
-
-/**
- * v1 allowlist of atom DIDs treated as ICC-sourced for inbound meter.
- * Includes the honest contract fixture anchor DID and the live StoragePort
- * proof code-section (tagged ICC-test for Phase-1 demo until corpus stamps
- * sourceActorDid on every ICC row).
- */
-export const ICC_SOURCED_ATOM_DID_ALLOWLIST: ReadonlySet<string> = new Set([
-  ICC_LICENSE_REFERENCE_OBLIGATION_FIXTURE.anchorDid,
-  "did:hauska:code-section:storage-port-proof/phase-1a",
-  "did:hauska:atom:code-section:storage-port-proof/phase-1a",
-]);
-
-const ICC_CITATION_RE =
-  /\b(ICC|International Code Council|IBC\b|IRC\b|IFC\b|Code Connect)\b/i;
 
 export interface SourceObligationAtomHint {
   did: string;
@@ -46,11 +36,14 @@ export interface SourceObligationAtomHint {
   sourceCitation?: string | null;
   /** Adapter / corpus stamp that marks ICC provenance. */
   sourceAdapter?: string | null;
+  /** Unmeasured vs known. Null adapter is unmeasured, not "not ICC". */
+  adapterStatus?: "known" | "unmeasured";
   /** Explicit stamp (atom.iccSourced / licensing stamp). */
   iccSourced?: boolean | null;
   /** Setback (or derived) cite of a code-section atom DID. */
   citedAtomDid?: string | null;
   entityType?: string | null;
+  jurisdictionTenant?: string | null;
 }
 
 export interface SourceObligationAccrual {
@@ -158,32 +151,30 @@ function toHint(
     return { did: input };
   }
   const entry = input as AtomProvenanceEntry & SourceObligationAtomHint;
+  const adapterStatus =
+    entry.adapterStatus ??
+    entry.source?.adapterStatus ??
+    (entry.source?.adapter == null && entry.sourceAdapter == null
+      ? "unmeasured"
+      : "known");
   return {
     did: entry.did,
     sourceActorDid: entry.sourceActorDid ?? null,
     sourceCitation: entry.sourceCitation ?? null,
     sourceAdapter: entry.source?.adapter ?? entry.sourceAdapter ?? null,
+    adapterStatus,
     iccSourced: entry.iccSourced ?? null,
     citedAtomDid: entry.citedAtomDid ?? null,
     entityType: entry.entityType ?? null,
+    jurisdictionTenant: entry.jurisdictionTenant ?? null,
   };
-}
-
-function adapterLooksIcc(adapter: string | null | undefined): boolean {
-  if (!adapter) return false;
-  const a = adapter.toLowerCase();
-  return (
-    a.includes("icc") ||
-    a.includes("code-connect") ||
-    a.includes("code_connect") ||
-    a === "ibc" ||
-    a === "irc"
-  );
 }
 
 /**
  * Resolve owed source-actor DID for one returned atom, or null if not
  * a licensed-source reference (v1: ICC only).
+ *
+ * Verdict comes from isIccContent — the same function the gate calls.
  */
 export function resolveSourceActorDid(
   hint: SourceObligationAtomHint | AtomProvenanceEntry | string,
@@ -191,34 +182,11 @@ export function resolveSourceActorDid(
   const h = toHint(hint);
   const did = normalizeDid(h.did);
   if (!did) return null;
-
-  const explicit = normalizeDid(h.sourceActorDid ?? undefined);
-  if (explicit === ICC_ACTOR_DID) return ICC_ACTOR_DID;
-
-  if (h.iccSourced === true) return ICC_ACTOR_DID;
-
-  if (did === ICC_ACTOR_DID) return ICC_ACTOR_DID;
-
-  if (ICC_SOURCED_ATOM_DID_ALLOWLIST.has(did)) return ICC_ACTOR_DID;
-
-  if (adapterLooksIcc(h.sourceAdapter)) return ICC_ACTOR_DID;
-
-  if (h.sourceCitation && ICC_CITATION_RE.test(h.sourceCitation)) {
-    return ICC_ACTOR_DID;
-  }
-
-  // Property setback (or derived) citing an ICC-or-proof code atom.
+  if (isIccContent(identityFromHint(h))) return ICC_ACTOR_DID;
   const cited = normalizeDid(h.citedAtomDid ?? undefined);
-  if (cited && ICC_SOURCED_ATOM_DID_ALLOWLIST.has(cited)) {
+  if (cited && isIccContent(identityFromHint({ did: cited }))) {
     return ICC_ACTOR_DID;
   }
-  if (cited) {
-    // Recurse on cited DID alone (allowlist / fixture path).
-    if (resolveSourceActorDid({ did: cited }) === ICC_ACTOR_DID) {
-      return ICC_ACTOR_DID;
-    }
-  }
-
   return null;
 }
 
@@ -303,6 +271,101 @@ async function defaultInsert(row: SourceObligationAccrual): Promise<void> {
  * Fire-and-forget from the tool path; never throws to the caller.
  * Safe on free_anonymous — does not import @hauska-sdk.
  */
+export interface SourceObligationLedgerRow {
+  id: number;
+  createdAt: string;
+  sourceActorDid: string;
+  atomDid: string;
+  tool: string;
+  product: string;
+  tier: string;
+  requestId: string;
+  obligationType: string;
+  amountMinor: number | null;
+  currency: string | null;
+  graceTerms: string | null;
+  note: string | null;
+}
+
+type LedgerSelect = (opts: {
+  sourceActorDid?: string;
+  requestId?: string;
+  limit?: number;
+}) => Promise<SourceObligationLedgerRow[]>;
+
+let selectOverride: LedgerSelect | null = null;
+
+export function setSourceObligationSelectForTests(
+  fn: LedgerSelect | null,
+): void {
+  selectOverride = fn;
+}
+
+/**
+ * Reader for source_obligation_ledger. A ledger nothing reads is dormant.
+ */
+export async function listSourceObligationLedger(opts: {
+  sourceActorDid?: string;
+  requestId?: string;
+  limit?: number;
+} = {}): Promise<SourceObligationLedgerRow[]> {
+  if (selectOverride) return selectOverride(opts);
+  const limit = opts.limit ?? 100;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    throw new Error("listSourceObligationLedger: limit must be 1..1000");
+  }
+  const clauses: string[] = [];
+  const values: unknown[] = [];
+  if (opts.sourceActorDid) {
+    values.push(opts.sourceActorDid);
+    clauses.push(`source_actor_did = $${values.length}`);
+  }
+  if (opts.requestId) {
+    values.push(opts.requestId);
+    clauses.push(`request_id = $${values.length}`);
+  }
+  values.push(limit);
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  const result = await getPool().query<{
+    id: number;
+    created_at: Date;
+    source_actor_did: string;
+    atom_did: string;
+    tool: string;
+    product: string;
+    tier: string;
+    request_id: string;
+    obligation_type: string;
+    amount_minor: number | null;
+    currency: string | null;
+    grace_terms: string | null;
+    note: string | null;
+  }>(
+    `SELECT id, created_at, source_actor_did, atom_did, tool, product, tier,
+            request_id, obligation_type, amount_minor, currency, grace_terms, note
+       FROM source_obligation_ledger
+       ${where}
+       ORDER BY created_at DESC
+       LIMIT $${values.length}`,
+    values,
+  );
+  return result.rows.map((r) => ({
+    id: r.id,
+    createdAt: r.created_at.toISOString(),
+    sourceActorDid: r.source_actor_did,
+    atomDid: r.atom_did,
+    tool: r.tool,
+    product: r.product,
+    tier: r.tier,
+    requestId: r.request_id,
+    obligationType: r.obligation_type,
+    amountMinor: r.amount_minor,
+    currency: r.currency,
+    graceTerms: r.grace_terms,
+    note: r.note,
+  }));
+}
+
 export function accrueSourceObligations(
   params: AccrueSourceObligationsParams,
 ): void {
