@@ -9,8 +9,10 @@
 --   - caller is authenticated (key_id present)
 --   - tool call succeeds (no error thrown)
 --
--- The `billed` flag records whether the call posted to Stripe (true if
--- STRIPE_SECRET_KEY is set AND the key row has a stripe_customer_id).
+-- RETIRED MEANING: `billed` was documented as a Stripe post. It never
+-- recorded payment. Migration 011 renames the column to `authorized`.
+-- Historical name kept in this comment so a grep for `billed` in
+-- migrations/ is the retirement record, not a live reader.
 --
 -- This table is written by recordLayer2Call in src/metering.ts, which
 -- fires asynchronously at the logToolRead choke point. Writes never block

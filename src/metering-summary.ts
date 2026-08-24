@@ -20,8 +20,8 @@ export interface MeteringSummaryResponse {
   windowDays: number;
   totals: {
     layer2Calls: number;
-    billed: number;
-    unbilled: number;
+    authorized: number;
+    unauthorized: number;
   };
   days: DaySummary[];
 }
@@ -95,13 +95,13 @@ async function buildMeteringSummary(
   // Aggregate totals
   const totalsResult = await pool.query<{
     total: string;
-    billed: string;
-    unbilled: string;
+    authorized: string;
+    unauthorized: string;
   }>(
     `SELECT
        COUNT(*) as total,
-       COUNT(*) FILTER (WHERE billed = true) as billed,
-       COUNT(*) FILTER (WHERE billed = false) as unbilled
+       COUNT(*) FILTER (WHERE authorized = true) as authorized,
+       COUNT(*) FILTER (WHERE authorized = false) as unauthorized
      FROM metering_events
      WHERE ts >= $1`,
     [windowStart.toISOString()],
@@ -139,15 +139,15 @@ async function buildMeteringSummary(
  * DB-free unit tests.
  */
 export function aggregateMeteringRows(
-  totalsRow: { total: string; billed: string; unbilled: string } | undefined,
+  totalsRow: { total: string; authorized: string; unauthorized: string } | undefined,
   dailyRows: Array<{ date: string; product: string; tool: string; count: string }>,
   windowDays: number,
   now: Date,
 ): MeteringSummaryResponse {
   const totals = {
     layer2Calls: parseInt(totalsRow?.total ?? "0", 10),
-    billed: parseInt(totalsRow?.billed ?? "0", 10),
-    unbilled: parseInt(totalsRow?.unbilled ?? "0", 10),
+    authorized: parseInt(totalsRow?.authorized ?? "0", 10),
+    unauthorized: parseInt(totalsRow?.unauthorized ?? "0", 10),
   };
 
   // Build a map of date -> {layer2Calls, byProduct, byTool}

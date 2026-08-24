@@ -221,12 +221,12 @@ export async function authorizePaidCall(
     checkout_url: result.checkoutUrl ?? null,
   });
 
-  // Observability append-only log (replaces Stripe-billed flag semantics).
+  // Observability append-only log. Writes authorized, never a payment flag.
   if (params.keyHash && params.requestId) {
     try {
       await getPool().query(
         `INSERT INTO metering_events
-           (key_id, key_hash, product, tier, tool, request_id, billed)
+           (key_id, key_hash, product, tier, tool, request_id, authorized)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
           params.keyId,

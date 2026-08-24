@@ -10,7 +10,7 @@ import {
   effectiveAccessPolicy,
   logAccessDenied,
 } from "./access-policy.js";
-import { buildEnvelope } from "./atom-shape.js";
+import { buildEnvelope, emptyProvenance } from "./atom-shape.js";
 import type { EnforcedAccessPolicy } from "./access-policy.js";
 import { LegacyHttpError } from "./legacy-client.js";
 import { getCurrentAccessSubject, getCurrentProduct, getCurrentTier } from "./request-context.js";
@@ -87,7 +87,7 @@ export function registerSmartFilesTools(server: McpServer): void {
         });
         const env = buildEnvelope(
           { scopeType, scopeId, folders, servedAt: data.servedAt },
-          [],
+          emptyProvenance("no-atoms"),
           { tier: getCurrentTier(), readKind: "catalog" },
         );
         return envelopeContent(env);
@@ -131,7 +131,7 @@ export function registerSmartFilesTools(server: McpServer): void {
             fileCount: files.length,
             servedAt: data.servedAt,
           },
-          [],
+          emptyProvenance("no-atoms"),
           { tier: getCurrentTier(), readKind: "catalog" },
         );
         return envelopeContent(env);
@@ -155,7 +155,7 @@ export function registerSmartFilesTools(server: McpServer): void {
         const data = await smartFilesClient.readFile(entityId, version);
         const status = data.status as string | undefined;
         if (status && status !== "held") {
-          const env = buildEnvelope({ read: data }, [], {
+          const env = buildEnvelope({ read: data }, emptyProvenance("no-atoms"), {
             tier: getCurrentTier(),
             readKind: "catalog",
             note: "Typed absence — not a silent empty result.",
@@ -174,7 +174,7 @@ export function registerSmartFilesTools(server: McpServer): void {
             `read_smart_file: access denied for accessPolicy ${doc.accessPolicy}`,
           );
         }
-        const env = buildEnvelope({ read: data }, [], {
+        const env = buildEnvelope({ read: data }, emptyProvenance("no-atoms"), {
           tier: getCurrentTier(),
           readKind: "catalog",
         });
@@ -197,7 +197,7 @@ export function registerSmartFilesTools(server: McpServer): void {
         const status = readFirst.status as string | undefined;
         if (status && status !== "held") {
           return envelopeContent(
-            buildEnvelope({ entityId, read: readFirst, placements: [] }, [], {
+            buildEnvelope({ entityId, read: readFirst, placements: [] }, emptyProvenance("no-atoms"), {
               tier: getCurrentTier(),
               readKind: "catalog",
               note: "Document not held — typed absence returned with empty placements.",
@@ -217,7 +217,7 @@ export function registerSmartFilesTools(server: McpServer): void {
           );
         }
         const data = await smartFilesClient.listPlacements(entityId);
-        const env = buildEnvelope(data, [], {
+        const env = buildEnvelope(data, emptyProvenance("no-atoms"), {
           tier: getCurrentTier(),
           readKind: "catalog",
         });
@@ -242,7 +242,7 @@ export function registerSmartFilesTools(server: McpServer): void {
       try {
         const data = await smartFilesClient.createFolder({ orgId, userId, label });
         return envelopeContent(
-          buildEnvelope(data, [], { tier: getCurrentTier(), readKind: "catalog" }),
+          buildEnvelope(data, emptyProvenance("no-atoms"), { tier: getCurrentTier(), readKind: "catalog" }),
         );
       } catch (err) {
         return errorContent(describeLegacyFailure("create_smart_file_folder", err));
@@ -267,7 +267,7 @@ export function registerSmartFilesTools(server: McpServer): void {
       try {
         const data = await smartFilesClient.uploadFile(args.folderId, args);
         return envelopeContent(
-          buildEnvelope(data, [], { tier: getCurrentTier(), readKind: "catalog" }),
+          buildEnvelope(data, emptyProvenance("no-atoms"), { tier: getCurrentTier(), readKind: "catalog" }),
         );
       } catch (err) {
         return errorContent(describeLegacyFailure("upload_smart_file", err));
@@ -289,7 +289,7 @@ export function registerSmartFilesTools(server: McpServer): void {
       try {
         const data = await smartFilesClient.shareFolder(folderId, { orgId, userId });
         return envelopeContent(
-          buildEnvelope(data, [], { tier: getCurrentTier(), readKind: "catalog" }),
+          buildEnvelope(data, emptyProvenance("no-atoms"), { tier: getCurrentTier(), readKind: "catalog" }),
         );
       } catch (err) {
         return errorContent(describeLegacyFailure("share_smart_file_folder", err));

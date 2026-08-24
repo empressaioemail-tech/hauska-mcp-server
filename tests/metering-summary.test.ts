@@ -83,25 +83,45 @@ for (const bad of ["0", "32", "banana", "-3", "1.5"]) {
 
 const NOW = new Date("2026-07-07T15:00:00.000Z");
 
-test("aggregation: totals passthrough with billed/unbilled split", () => {
+test("aggregation: totals passthrough with authorized/unauthorized split", () => {
   const out = aggregateMeteringRows(
-    { total: "10", billed: "3", unbilled: "7" },
+    { total: "10", authorized: "3", unauthorized: "7" },
     [],
     7,
     NOW,
   );
-  assert.deepEqual(out.totals, { layer2Calls: 10, billed: 3, unbilled: 7 });
+  assert.deepEqual(out.totals, { layer2Calls: 10, authorized: 3, unauthorized: 7 });
   assert.equal(out.windowDays, 7);
+  assert.equal("billed" in out.totals, false);
+  assert.equal("unbilled" in out.totals, false);
+});
+
+test("authorized calls with no billing record are not a revenue figure", () => {
+  const out = aggregateMeteringRows(
+    { total: "5", authorized: "5", unauthorized: "0" },
+    [],
+    7,
+    NOW,
+  );
+  assert.equal(out.totals.authorized, 5);
+  const body = JSON.parse(JSON.stringify(out)) as {
+    totals: Record<string, number>;
+    revenue?: unknown;
+    billed?: unknown;
+  };
+  assert.equal(body.totals.billed, undefined);
+  assert.equal(body.revenue, undefined);
+  assert.equal(body.billed, undefined);
 });
 
 test("aggregation: undefined totals row yields zeros", () => {
   const out = aggregateMeteringRows(undefined, [], 7, NOW);
-  assert.deepEqual(out.totals, { layer2Calls: 0, billed: 0, unbilled: 0 });
+  assert.deepEqual(out.totals, { layer2Calls: 0, authorized: 0, unauthorized: 0 });
 });
 
 test("aggregation: zero-fills the full window ascending", () => {
   const out = aggregateMeteringRows(
-    { total: "0", billed: "0", unbilled: "0" },
+    { total: "0", authorized: "0", unauthorized: "0" },
     [],
     3,
     NOW,
@@ -120,7 +140,7 @@ test("aggregation: zero-fills the full window ascending", () => {
 
 test("aggregation: byProduct and byTool group and sum per day", () => {
   const out = aggregateMeteringRows(
-    { total: "6", billed: "0", unbilled: "6" },
+    { total: "6", authorized: "0", unauthorized: "6" },
     [
       { date: "2026-07-06", product: "map", tool: "assemble_map_layers", count: "2" },
       { date: "2026-07-06", product: "map", tool: "get_hazard_profile", count: "1" },
