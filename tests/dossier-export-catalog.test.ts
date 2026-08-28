@@ -20,9 +20,28 @@ import {
   wasSdkMeteringModuleLoaded,
 } from "../src/sdk-metering.js";
 import { registerTools } from "../src/tools.js";
+import {
+  XRAY_PIPELINE_ABSENT_ERROR,
+  XRAY_VERDICT_PLACEHOLDER,
+} from "../src/xray-export-gate.js";
 
 const PARCEL = "48029:105129";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+const VALID_BRIEF = {
+  sections: [
+    {
+      id: "zoning",
+      title: "Zoning",
+      facts: [{ label: "District", value: "R1" }],
+    },
+  ],
+};
+
+const VALID_DOSSIER_ARGS = {
+  verdict_line: "BUILDABLE with conditions",
+  brief: VALID_BRIEF,
+};
 
 interface RecordedCall {
   url: string;
@@ -71,6 +90,20 @@ const refreshFixture = {
   floodZoneHonestUnavailable: true,
 };
 
+const statusFixture = {
+  atom: refreshFixture.atom,
+  artifacts: {
+    "pdf-dossier": {
+      format: "pdf-dossier",
+      ref: "file:///tmp/pdf-dossier",
+      byteCount: 7900,
+      pageCount: 6,
+      verdictIncluded: true,
+      briefFactCount: 2,
+    },
+  },
+};
+
 function paidCtx() {
   return {
     tier: "developer_pro" as const,
@@ -86,7 +119,7 @@ function paidCtx() {
   };
 }
 
-function mockFetchRouter() {
+function mockFetchRouter(options?: { hollowStored?: boolean }) {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
@@ -101,6 +134,27 @@ function mockFetchRouter() {
         status: 201,
         headers: { "content-type": "application/json" },
       });
+    }
+    if (
+      url.includes("/dossier-export") &&
+      !url.includes("/refresh") &&
+      !url.includes("/download")
+    ) {
+      const artifacts = options?.hollowStored
+        ? {
+            "pdf-dossier": {
+              format: "pdf-dossier",
+              ref: "file:///tmp/hollow-dossier",
+              byteCount: 100,
+              verdictIncluded: false,
+              briefFactCount: 0,
+            },
+          }
+        : statusFixture.artifacts;
+      return new Response(
+        JSON.stringify({ atom: statusFixture.atom, artifacts }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (url.includes("/dossier-export/download")) {
       const body = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
@@ -117,8 +171,9 @@ async function callTool(
   name: string,
   args: Record<string, unknown>,
   ctx: Record<string, unknown> = paidCtx(),
+  fetchOptions?: { hollowStored?: boolean },
 ) {
-  mockFetchRouter();
+  mockFetchRouter(fetchOptions);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = new McpServer({ name: "test", version: "0.0.0" });
   registerTools(server);
@@ -236,6 +291,7 @@ test("refresh_parcel_dossier_export format param downloads pdf-dossier with NO f
   const result = await callTool("refresh_parcel_dossier_export", {
     parcel_node_id: PARCEL,
     format: "pdf-dossier",
+    ...VALID_DOSSIER_ARGS,
   });
   assert.notEqual(result.isError, true);
 
@@ -286,7 +342,7 @@ test("refresh_parcel_dossier_export surfaces engine 422 as an actionable error",
   const result = await requestContext.run(paidCtx(), () =>
     client.callTool({
       name: "refresh_parcel_dossier_export",
-      arguments: { parcel_node_id: PARCEL },
+      arguments: { parcel_node_id: PARCEL, ...VALID_DOSSIER_ARGS },
     }),
   );
 
@@ -321,7 +377,10 @@ test("refresh_parcel_dossier_export invokes SDK metering gate when SDK_METERING 
   resetSdkMeteringGateForTests();
   assert.equal(wasSdkMeteringModuleLoaded(), false);
 
-  await callTool("refresh_parcel_dossier_export", { parcel_node_id: PARCEL });
+  await callTool("refresh_parcel_dossier_export", {
+    parcel_node_id: PARCEL,
+    ...VALID_DOSSIER_ARGS,
+  });
   assert.equal(
     wasSdkMeteringModuleLoaded(),
     true,
@@ -414,4 +473,83 @@ test("download_parcel_dossier_export surfaces 404 as call-refresh-first", async 
   const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
   assert.match(text, /404/);
   assert.match(text, /refresh_parcel_dossier_export/);
+});
+
+test("P-89: refresh_parcel_dossier_export refuses missing verdict without engine call", async () => {
+  const result = await callTool("refresh_parcel_dossier_export", {
+    parcel_node_id: PARCEL,
+    brief: VALID_BRIEF,
+  });
+  assert.equal(result.isError, true);
+  const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
+  const parsed = JSON.parse(text) as { status: number; error: string; missing: string[] };
+  assert.equal(parsed.status, 422);
+  assert.equal(parsed.error, XRAY_PIPELINE_ABSENT_ERROR);
+  assert.ok(parsed.missing.includes("verdict"));
+  assert.equal(calls.length, 0, "engine-api must not be called when verdict is missing");
+});
+
+test("P-89: refresh_parcel_dossier_export refuses unresolved verdict placeholder", async () => {
+  const result = await callTool("refresh_parcel_dossier_export", {
+    parcel_node_id: PARCEL,
+    verdict_line: XRAY_VERDICT_PLACEHOLDER,
+    brief: VALID_BRIEF,
+  });
+  assert.equal(result.isError, true);
+  const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
+  const parsed = JSON.parse(text) as { error: string; missing: string[] };
+  assert.equal(parsed.error, XRAY_PIPELINE_ABSENT_ERROR);
+  assert.ok(parsed.missing.includes("verdict"));
+  assert.equal(calls.length, 0);
+});
+
+test("P-89: refresh_parcel_dossier_export refuses verdict with empty brief facts", async () => {
+  const result = await callTool("refresh_parcel_dossier_export", {
+    parcel_node_id: PARCEL,
+    verdict_line: "BUILDABLE",
+    brief: null,
+  });
+  assert.equal(result.isError, true);
+  const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
+  const parsed = JSON.parse(text) as { error: string; missing: string[] };
+  assert.equal(parsed.error, XRAY_PIPELINE_ABSENT_ERROR);
+  assert.ok(parsed.missing.includes("brief_facts"));
+  assert.equal(calls.length, 0);
+});
+
+test("P-89: refresh_parcel_dossier_export forwards live_view_url verbatim (WDLL item 4)", async () => {
+  const liveUrl = "https://smartsite.cloud/share?g=grant-uuid-test";
+  const result = await callTool("refresh_parcel_dossier_export", {
+    parcel_node_id: PARCEL,
+    live_view_url: liveUrl,
+    ...VALID_DOSSIER_ARGS,
+  });
+  assert.notEqual(result.isError, true);
+
+  const refreshCalls = calls.filter((c) => c.url.includes("/dossier-export/refresh"));
+  assert.equal(refreshCalls.length, 1);
+  const sent = JSON.parse(refreshCalls[0]!.body ?? "{}") as Record<string, unknown>;
+  assert.equal(sent.liveViewUrl, liveUrl);
+
+  const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
+  const envelope = JSON.parse(text) as { data: { liveViewUrl?: string } };
+  assert.equal(envelope.data.liveViewUrl, liveUrl);
+});
+
+test("P-89: download_parcel_dossier_export refuses stored hollow artifact without PDF bytes", async () => {
+  const result = await callTool(
+    "download_parcel_dossier_export",
+    { parcel_node_id: PARCEL },
+    paidCtx(),
+    { hollowStored: true },
+  );
+  assert.equal(result.isError, true);
+  const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
+  const parsed = JSON.parse(text) as { status: number; error: string };
+  assert.equal(parsed.status, 422);
+  assert.equal(parsed.error, XRAY_PIPELINE_ABSENT_ERROR);
+  assert.doesNotMatch(text, /%PDF/);
+
+  const downloadCalls = calls.filter((c) => c.url.includes("/dossier-export/download"));
+  assert.equal(downloadCalls.length, 0, "byte download must not run for hollow stored artifact");
 });

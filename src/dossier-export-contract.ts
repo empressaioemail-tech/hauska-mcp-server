@@ -29,6 +29,10 @@ export interface DossierExportArtifactEntry {
   pageCount?: number;
   deferred?: boolean;
   deferredReason?: string;
+  /** pdf-dossier only: recorded on refresh for hollow-download refuse (P-89). */
+  verdictIncluded?: boolean;
+  briefSectionCount?: number;
+  briefFactCount?: number;
 }
 
 /** Caller-supplied brief fact — rendered verbatim with source · vintage. */
@@ -63,6 +67,8 @@ export interface DossierExportRefreshRequest {
   brief?: { sections: DossierBriefSection[] };
   chatSummary?: DossierChatSummary;
   notes?: string;
+  /** W2.4 live-view URL forwarded verbatim to the engine assembler (P-90 prints). */
+  liveViewUrl?: string;
 }
 
 export interface DossierExportRefreshResponse {
@@ -107,6 +113,8 @@ export interface ParcelDossierExportToolData {
   parcelNodeId: string;
   atom: Record<string, unknown>;
   artifacts: Record<string, DossierExportArtifactEntry>;
+  /** Echo of caller-supplied live_view_url when provided (W2.4 / P-89 item 4). */
+  liveViewUrl?: string;
   download?: DossierExportDownloadPayload;
   pageCount?: number;
   dossierPageCount?: number;
