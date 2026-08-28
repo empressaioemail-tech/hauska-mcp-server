@@ -525,4 +525,29 @@ export const engineApiClient = {
       timeoutMs: EXPORT_DOWNLOAD_TIMEOUT_MS,
     });
   },
+
+  /**
+   * Property-dossier status — atom + pdf-dossier artifact metadata without
+   * streaming bytes. Used by download_parcel_dossier_export to refuse hollow
+   * stored artifacts (P-89 item 3) before the byte hop.
+   */
+  async getParcelDossierExport(
+    parcelNodeId: string,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<{
+    atom: Record<string, unknown>;
+    artifacts: Record<string, import("./dossier-export-contract.js").DossierExportArtifactEntry>;
+  }> {
+    const gateHeaders = dossierExportGateHeaders(gate);
+    const encoded = encodeURIComponent(parcelNodeId);
+    return engineApiFetch<{
+      atom: Record<string, unknown>;
+      artifacts: Record<string, import("./dossier-export-contract.js").DossierExportArtifactEntry>;
+    }>(`/v1/property-nodes/${encoded}/dossier-export`, {
+      method: "GET",
+      gateHeaders,
+      gateContext: gateContextFromGate(gate),
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    });
+  },
 };

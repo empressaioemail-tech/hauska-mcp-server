@@ -153,6 +153,12 @@ import {
   DOSSIER_EXPORT_MAX_INLINE_BYTES,
   dossierExportDownloadPath,
 } from "./dossier-export-contract.js";
+import {
+  formatHollowXrayRefuse,
+  formatStoredHollowRefuse,
+  isStoredDossierArtifactHollow,
+  refuseHollowXrayRefresh,
+} from "./xray-export-gate.js";
 
 const ATOM_DID_REGEX = /^did:hauska:[a-z-]+:[^\s]+$/;
 
@@ -1282,6 +1288,7 @@ export function registerTools(server: McpServer) {
             }),
           ),
         })
+        .nullable()
         .optional()
         .describe(
           "Optional brief facts (sections of label/value facts with per-fact source and vintage) rendered in the summary-grid language. Absent values render as honest UNAVAILABLE chips.",
@@ -1300,6 +1307,13 @@ export function registerTools(server: McpServer) {
         .string()
         .optional()
         .describe("Optional owner notes rendered on their own dossier page."),
+      live_view_url: z
+        .string()
+        .max(500)
+        .optional()
+        .describe(
+          "Optional live Smart Site view URL forwarded verbatim to the engine assembler (W2.4). Printing onto PDF bytes is engine-owned (P-90).",
+        ),
     },
     async ({
       parcel_node_id,
@@ -1310,6 +1324,7 @@ export function registerTools(server: McpServer) {
       brief,
       chat_summary,
       notes,
+      live_view_url,
     }) => {
       const tool = "refresh_parcel_dossier_export";
       const tier = getCurrentTier();
@@ -1335,6 +1350,14 @@ export function registerTools(server: McpServer) {
 
       const identity = requireIdentifiedCaller(tool);
       if (!identity.ok) return identity.content;
+
+      const hollowGate = refuseHollowXrayRefresh({
+        verdictLine: verdict_line,
+        brief,
+      });
+      if (!hollowGate.ok) {
+        return errorContent(formatHollowXrayRefuse(hollowGate));
+      }
 
       const authCtx = getCurrentAuthContext();
       if (isSdkMeteringEnabled()) {
@@ -1377,9 +1400,10 @@ export function registerTools(server: McpServer) {
             address,
             countyName: county_name,
             verdictLine: verdict_line,
-            brief,
+            ...(brief != null ? { brief } : {}),
             chatSummary: chat_summary,
             notes,
+            ...(live_view_url ? { liveViewUrl: live_view_url } : {}),
           },
           gate,
         );
@@ -1389,6 +1413,7 @@ export function registerTools(server: McpServer) {
             parcelNodeId: parcel_node_id,
             atom: refresh.atom,
             artifacts: refresh.artifacts,
+            ...(live_view_url ? { liveViewUrl: live_view_url } : {}),
             pageCount: refresh.pageCount,
             dossierPageCount: refresh.dossierPageCount,
             sitePlanAppended: refresh.sitePlanAppended,
@@ -1560,6 +1585,15 @@ export function registerTools(server: McpServer) {
       };
 
       try {
+        const status = await engineApiClient.getParcelDossierExport(
+          parcel_node_id,
+          gate,
+        );
+        const storedArtifact = status.artifacts["pdf-dossier"];
+        if (isStoredDossierArtifactHollow(storedArtifact)) {
+          return errorContent(formatStoredHollowRefuse());
+        }
+
         const { bytes, contentType } =
           await engineApiClient.downloadParcelDossierExport(
             parcel_node_id,
