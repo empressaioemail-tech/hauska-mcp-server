@@ -1,8 +1,12 @@
 // P-89 violation suite — each refuse is proven by violating the gate.
 
 import { strict as assert } from "node:assert";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
+import { PUBLIC_CATALOG_TOOLS } from "../src/product-gates.js";
 import {
   isStoredDossierArtifactHollow,
   refuseHollowXrayRefresh,
@@ -117,9 +121,32 @@ test("isStoredDossierArtifactHollow passes: deferred artifact is not hollow-refu
   );
 });
 
-test("WDLL item 5 finding: flood liveViewUrl is not an MCP tool path", () => {
-  // Flood drainage refresh is PE BFF → engine-api directly (pe-flood-drainage-core.ts).
-  // hauska-mcp-server has no refresh_flood_* tool; liveViewUrl forwarding for flood
-  // is out of scope for this repo until a flood MCP tool is registered.
-  assert.ok(true, "documented finding — flood is not an MCP write path today");
+function isFloodRefreshToolName(name: string): boolean {
+  return /refresh_.*flood|flood.*refresh/i.test(name);
+}
+
+test("flood-refresh matcher is not vacuous", () => {
+  assert.equal(isFloodRefreshToolName("refresh_flood_export"), true);
+  assert.equal(isFloodRefreshToolName("refresh_parcel_flood_export"), true);
+  assert.equal(isFloodRefreshToolName("refresh_parcel_dossier_export"), false);
+  assert.equal(isFloodRefreshToolName("simulate_site_drainage"), false);
+  assert.equal(isFloodRefreshToolName("get_site_drainage"), false);
+});
+
+test("WDLL item 5: no flood refresh write path in catalog or tools.ts", () => {
+  // Two independently derived lists. A flood refresh tool added to only one
+  // side fails. Drainage simulate/get are not flood refresh.
+  const catalogHits = [...PUBLIC_CATALOG_TOOLS].filter(isFloodRefreshToolName);
+  assert.deepEqual(catalogHits, []);
+
+  const toolsSrc = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), "../src/tools.ts"),
+    "utf8",
+  );
+  const registered = [...toolsSrc.matchAll(/server\.tool\(\s*"([^"]+)"/g)].map(
+    (m) => m[1],
+  );
+  assert.ok(registered.length > 0, "tools.ts must register at least one tool");
+  const registeredHits = registered.filter(isFloodRefreshToolName);
+  assert.deepEqual(registeredHits, []);
 });
