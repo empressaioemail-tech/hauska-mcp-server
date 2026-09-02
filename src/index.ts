@@ -38,6 +38,7 @@ import {
   type RateLimitStore,
 } from "./rate-limit.js";
 import { requestContext } from "./request-context.js";
+import { getSourceObligationLedger } from "./source-obligation-reader.js";
 import { registerTools } from "./tools.js";
 
 dotenv.config();
@@ -290,6 +291,15 @@ async function main() {
   // /admin/*) can reach it with its reporting key.
   app.get("/metering/summary", authMiddleware, getMeteringSummary);
 
+  // Source obligation ledger reader (G-111, gap 2). Same platform_internal
+  // gate as /metering/summary. Scoped lookups only -- see
+  // source-obligation-reader.ts for why an unfiltered read is refused.
+  app.get(
+    "/obligations/source-ledger",
+    authMiddleware,
+    getSourceObligationLedger,
+  );
+
   // G-11: Dashboards resolves X-Hauska-Key here. Plain JSON, no key
   // material. Anonymous callers get anonymous:true. Unknown keys 401
   // from authMiddleware before this handler runs.
@@ -303,6 +313,17 @@ async function main() {
     // Generate the correlation id before anything else and bind it into
     // the request context so every downstream log line carries it.
     const requestId = randomUUID();
+    // G-111 gap 1: this is the same id source_obligation_ledger.request_id
+    // gets for any accrual this call produces (source-obligation-meter.ts
+    // reads it back via getCurrentRequestId()). Until this line existed, a
+    // caller had no way to learn it -- not in the JSON-RPC body, not in a
+    // header -- so a consumer wanting to reconcile its own cache against the
+    // ledger (plan-review's source_obligation_ledger reconciliation,
+    // hauska-mcp-server PR #8 upstream) had nothing to join on. Set before
+    // the transport writes anything, so it survives whatever headers the
+    // transport itself sets (Node merges prior setHeader calls with a later
+    // writeHead unless the same header name is repeated).
+    res.setHeader("x-hauska-request-id", requestId);
     const startedAt = Date.now();
     const base: AuthContext = req.hauska ?? {
       tier: "free_anonymous",
