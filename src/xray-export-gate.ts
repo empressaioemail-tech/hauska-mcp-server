@@ -68,7 +68,10 @@ export function refuseHollowXrayRefresh(
 export function isStoredDossierArtifactHollow(
   artifact: DossierExportArtifactEntry | undefined,
 ): boolean {
-  if (!artifact || artifact.deferred === true) return false;
+  // No stored-artifact record at all is an unknown value, not a known-good one:
+  // fail closed (P-89 leftover, 2026-09-03 gate re-verify).
+  if (!artifact) return true;
+  if (artifact.deferred === true) return false;
   if (typeof artifact.ref === "string" && artifact.ref.startsWith("deferred:")) {
     return false;
   }

@@ -105,6 +105,10 @@ test("isStoredDossierArtifactHollow passes: valid stored artifact metadata", () 
   );
 });
 
+test("isStoredDossierArtifactHollow violates: no stored-artifact record at all fails closed (P-89 leftover, 2026-09-03)", () => {
+  assert.equal(isStoredDossierArtifactHollow(undefined), true);
+});
+
 test("isStoredDossierArtifactHollow passes: deferred artifact is not hollow-refused here", () => {
   assert.equal(
     isStoredDossierArtifactHollow({
