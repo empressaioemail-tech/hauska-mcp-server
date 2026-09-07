@@ -51,7 +51,7 @@ export function deriveParcelKeyedPropertyEntityTypes(
 }
 
 /**
- * Committed mirror of engine `PROPERTY_ENTITY_TYPES` (2026-08-12).
+ * Committed mirror of engine `PROPERTY_ENTITY_TYPES` (2026-09-07).
  * Cross-repo test fails if engine list diverges - update via engine truth, not hand-extend.
  */
 export const ENGINE_PROPERTY_ENTITY_TYPES_MIRROR: readonly string[] = [
@@ -71,6 +71,7 @@ export const ENGINE_PROPERTY_ENTITY_TYPES_MIRROR: readonly string[] = [
   "special-district-fact",
   "road-node",
   "rrc-pipeline-fact",
+  "property-boundary-edge",
 ];
 
 export const PARCEL_KEYED_PROPERTY_ENTITY_TYPES = deriveParcelKeyedPropertyEntityTypes(
