@@ -44,7 +44,7 @@ test("MCP parcel-keyed set matches engine PROPERTY_ENTITY_TYPES minus road-node"
     [...expected],
     "Update ENGINE_PROPERTY_ENTITY_TYPES_MIRROR in property-entity-types.ts when engine adds types",
   );
-  assert.equal(expected.length, 15);
+  assert.equal(expected.length, 16);
   assert.ok(!expected.includes("road-node"));
 });
 
