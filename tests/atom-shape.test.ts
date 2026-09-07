@@ -318,6 +318,8 @@ const ENVELOPE_HARNESS: Record<
   parcelTerrainExportEnvelope: () => null,
   parcelSitePlanExportEnvelope: () => null,
   parcelDossierExportEnvelope: () => null,
+  parcelFeasibilityExportEnvelope: () => null,
+  parcelFloodDrainageExportEnvelope: () => null,
   atomTraceEnvelope: () => null,
   resolvePlaceEnvelope: () => null,
   getPlaceLayersEnvelope: () => null,
