@@ -35,6 +35,18 @@ import {
   type DossierExportRefreshRequest,
   type DossierExportRefreshResponse,
 } from "./dossier-export-contract.js";
+import {
+  FEASIBILITY_EXPORT_PACKAGE_ID,
+  feasibilityExportDownloadPath,
+  type FeasibilityExportRefreshRequest,
+  type FeasibilityExportRefreshResponse,
+} from "./feasibility-export-contract.js";
+import {
+  FLOOD_DRAINAGE_EXPORT_PACKAGE_ID,
+  floodDrainageExportDownloadPath,
+  type FloodDrainageExportRefreshRequest,
+  type FloodDrainageExportRefreshResponse,
+} from "./flood-drainage-export-contract.js";
 import { buildSignedGateContext } from "./gate-context.js";
 
 const DEFAULT_ENGINE_API_URL = "http://localhost:8080";
@@ -344,6 +356,42 @@ function dossierExportGateHeaders(
   });
 }
 
+/**
+ * Feasibility-Study export (OPS-16 P-120 item 27): same public-paid gate
+ * shape as dossier-export, distinct packageId only so gate-front logging
+ * can tell the paid catalog exports apart.
+ */
+function feasibilityExportGateHeaders(
+  gate: MapLayersAssembleGateContext,
+): Record<string, string> {
+  return gateFrontHeadersFromContext({
+    product: gate.gateProduct,
+    packageId: FEASIBILITY_EXPORT_PACKAGE_ID,
+    accessTier: gate.accessTier,
+    tenantId: gate.tenantId,
+    gateCredentialId: gate.gateCredentialId,
+    requestId: gate.requestId,
+  });
+}
+
+/**
+ * Flood & Drainage export (OPS-16 P-120 item 27): same public-paid gate
+ * shape as dossier-export, distinct packageId only so gate-front logging
+ * can tell the paid catalog exports apart.
+ */
+function floodDrainageExportGateHeaders(
+  gate: MapLayersAssembleGateContext,
+): Record<string, string> {
+  return gateFrontHeadersFromContext({
+    product: gate.gateProduct,
+    packageId: FLOOD_DRAINAGE_EXPORT_PACKAGE_ID,
+    accessTier: gate.accessTier,
+    tenantId: gate.tenantId,
+    gateCredentialId: gate.gateCredentialId,
+    requestId: gate.requestId,
+  });
+}
+
 export interface MapLayersAssembleGateContext {
   gateProduct: GateFrontProduct;
   accessTier: GateFrontAccessTier;
@@ -548,6 +596,91 @@ export const engineApiClient = {
       gateHeaders,
       gateContext: gateContextFromGate(gate),
       timeoutMs: DEFAULT_TIMEOUT_MS,
+    });
+  },
+
+  /**
+   * Feasibility-Study refresh (OPS-16 P-120 item 27, engine PR #380). The
+   * request body is forwarded VERBATIM — the engine owns validation and
+   * rendering; it renders exactly what the request carries and
+   * honest-degrades on anything absent (narrativeIsDeterministicSkeleton on
+   * the response says whether it fell back to the skeleton). Same timeout
+   * budget as the dossier/site-plan refresh: the feasibility assembler
+   * reuses the site-plan model-composition path server-side.
+   */
+  async refreshParcelFeasibilityExport(
+    parcelNodeId: string,
+    request: FeasibilityExportRefreshRequest,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<FeasibilityExportRefreshResponse> {
+    const gateHeaders = feasibilityExportGateHeaders(gate);
+    const encoded = encodeURIComponent(parcelNodeId);
+    return engineApiFetch<FeasibilityExportRefreshResponse>(
+      `/v1/property-nodes/${encoded}/feasibility-export/refresh`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+        gateHeaders,
+        gateContext: gateContextFromGate(gate),
+        timeoutMs: SITE_PLAN_REFRESH_TIMEOUT_MS,
+      },
+    );
+  },
+
+  /** Feasibility-Study download — always the single pdf-feasibility artifact. */
+  async downloadParcelFeasibilityExport(
+    parcelNodeId: string,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const gateHeaders = feasibilityExportGateHeaders(gate);
+    return engineApiFetchBytes(feasibilityExportDownloadPath(parcelNodeId), {
+      gateHeaders,
+      gateContext: gateContextFromGate(gate),
+      timeoutMs: EXPORT_DOWNLOAD_TIMEOUT_MS,
+    });
+  },
+
+  /**
+   * Flood & Drainage refresh (OPS-16 P-120 item 27). The request body is
+   * forwarded VERBATIM. Unlike dossier/site-plan/feasibility, the engine's
+   * response is data-wrapped with a singular `artifact` plus a `study`
+   * GeoJSON payload — see flood-drainage-export-contract.ts for why this is
+   * not forced into the `{ atom, artifacts }` shape.
+   */
+  async refreshParcelFloodDrainageExport(
+    parcelNodeId: string,
+    request: FloodDrainageExportRefreshRequest,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<FloodDrainageExportRefreshResponse> {
+    const gateHeaders = floodDrainageExportGateHeaders(gate);
+    const encoded = encodeURIComponent(parcelNodeId);
+    return engineApiFetch<FloodDrainageExportRefreshResponse>(
+      `/v1/property-nodes/${encoded}/flood-drainage/refresh`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+        gateHeaders,
+        gateContext: gateContextFromGate(gate),
+        timeoutMs: SITE_PLAN_REFRESH_TIMEOUT_MS,
+      },
+    );
+  },
+
+  /**
+   * Flood & Drainage download — always the single pdf-flood-drainage
+   * artifact. The engine route requires `?format=pdf-flood-drainage`
+   * (baked into floodDrainageExportDownloadPath), unlike dossier/feasibility
+   * which take no format query param at all.
+   */
+  async downloadParcelFloodDrainageExport(
+    parcelNodeId: string,
+    gate: MapLayersAssembleGateContext,
+  ): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const gateHeaders = floodDrainageExportGateHeaders(gate);
+    return engineApiFetchBytes(floodDrainageExportDownloadPath(parcelNodeId), {
+      gateHeaders,
+      gateContext: gateContextFromGate(gate),
+      timeoutMs: EXPORT_DOWNLOAD_TIMEOUT_MS,
     });
   },
 };

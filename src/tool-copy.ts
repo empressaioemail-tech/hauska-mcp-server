@@ -85,6 +85,27 @@ export const TOOL_COPY = {
     "Not survey-grade — derived from public GIS records plus caller-supplied content, honesty line carried in the PDF. " +
     PUBLIC_TIER,
 
+  refresh_parcel_feasibility_export:
+    "Refresh and return the paid Feasibility Study PDF export for county_fips:prop_id (e.g. 48029:105129). " +
+    "Engine-composed report: buildable-envelope facts, open-items table, and a narrative section that is either an already-generated caller-supplied narrative (narrativeOverride) or the engine's deterministic skeleton fallback when omitted — narrativeIsDeterministicSkeleton on the response says which. " +
+    "Single format: pdf-feasibility. The engine never calls an LLM itself; it renders exactly what the request carries and honest-degrades on anything absent. " +
+    "Sibling of refresh_parcel_dossier_export — SAME public-paid gate and SAME authorizePaidCall metering helper, distinct engine route (feasibility-export/*). " +
+    "Requires X-Hauska-Key with paid entitlement; anonymous and free tiers are denied. " +
+    "One SDK metering event (authorizePaidCall) per export request. " +
+    "Optional format param (pdf-feasibility) triggers artifact download (inline base64 when small; ref + downloadPath when large). " +
+    "Not survey-grade — derived from public GIS records plus optional caller-supplied narrative, honesty line carried in the PDF. " +
+    PUBLIC_TIER,
+
+  refresh_parcel_flood_drainage_export:
+    "Refresh and return the paid Flood & Drainage PDF export for county_fips:prop_id (e.g. 48029:105129). " +
+    "Engine-composed report: catchment/drainage-zone/rainfall-result/flow-line study (returned verbatim under `study` — catchmentGeoJson, drainageZonesGeoJson, rainfallResultGeoJson, flowLinesGeoJson, rainfallDepthInches, rainfallSource, demProvenance, briefing, and an optional water-gradient PNG) plus the pdf-flood-drainage artifact. " +
+    "Single format: pdf-flood-drainage. Sibling of refresh_parcel_dossier_export — SAME public-paid gate and SAME authorizePaidCall metering helper, distinct engine route (flood-drainage/*), and a distinct response shape (data-wrapped, singular `artifact` plus `study`, not the {atom, artifacts} shape site-plan/dossier/feasibility share). " +
+    "Requires X-Hauska-Key with paid entitlement; anonymous and free tiers are denied. " +
+    "One SDK metering event (authorizePaidCall) per export request. " +
+    "Optional format param (pdf-flood-drainage) triggers artifact download (inline base64 when small; ref + downloadPath when large). " +
+    "Not survey-grade — derived from public GIS records and DEM-sourced hydrology, honesty line carried in the PDF; honestEmpty on the study when the drainage field is degenerate. " +
+    PUBLIC_TIER,
+
   query_jurisdiction:
     "Per-jurisdiction status snapshot: loaded edition, quality bar, atom count, drift. " +
     "Confirm availability before search_atoms. Parcel-level zoning by address is not v1 — use resolve_place with a product key. " +

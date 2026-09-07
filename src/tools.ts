@@ -27,6 +27,8 @@ import {
   parcelTerrainExportEnvelope,
   parcelSitePlanExportEnvelope,
   parcelDossierExportEnvelope,
+  parcelFeasibilityExportEnvelope,
+  parcelFloodDrainageExportEnvelope,
   getBriefRunEnvelope,
   getPlaceDossierEnvelope,
   getPlaceLayersEnvelope,
@@ -159,6 +161,20 @@ import {
   isStoredDossierArtifactHollow,
   refuseHollowXrayRefresh,
 } from "./xray-export-gate.js";
+import {
+  isFeasibilityExportArtifactDeferred,
+  FEASIBILITY_EXPORT_CONTENT_TYPE,
+  FEASIBILITY_EXPORT_FORMATS,
+  FEASIBILITY_EXPORT_MAX_INLINE_BYTES,
+  feasibilityExportDownloadPath,
+} from "./feasibility-export-contract.js";
+import {
+  isFloodDrainageExportArtifactDeferred,
+  FLOOD_DRAINAGE_EXPORT_CONTENT_TYPE,
+  FLOOD_DRAINAGE_EXPORT_FORMATS,
+  FLOOD_DRAINAGE_EXPORT_MAX_INLINE_BYTES,
+  floodDrainageExportDownloadPath,
+} from "./flood-drainage-export-contract.js";
 
 const ATOM_DID_REGEX = /^did:hauska:[a-z-]+:[^\s]+$/;
 
@@ -1670,6 +1686,802 @@ export function registerTools(server: McpServer) {
           }
           return errorContent(
             `Engine API rejected dossier export download (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`,
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 2d-3: refresh_parcel_feasibility_export (OPS-16 P-120 item 27,
+  // engine PR #380 wiring).
+  // Sibling of refresh_parcel_dossier_export above: SAME public-paid
+  // accessPolicy gate, SAME one-meter-per-export-request metering
+  // discipline via the shared SDK metering helper — a distinct engine
+  // route (feasibility-export/*) and a single format (pdf-feasibility).
+  // The request body is forwarded to the engine VERBATIM; the engine
+  // renders exactly what it carries and honest-degrades on anything
+  // absent — it never calls an LLM itself (narrativeOverride is an
+  // already-generated, caller-supplied narrative; absent means the
+  // deterministic skeleton renders, reported via
+  // narrativeIsDeterministicSkeleton). No hollow-refresh gate: unlike
+  // dossier/X-ray, feasibility content is engine-composed, not
+  // caller-supplied verdict/brief, so there is no equivalent hollow
+  // condition to check for here.
+  // -----------------------------------------------------------------
+  server.tool(
+    "refresh_parcel_feasibility_export",
+    TOOL_COPY.refresh_parcel_feasibility_export,
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          PARCEL_NODE_ID_REGEX,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48029:105129)",
+        )
+        .describe("Permanent parcel node id county_fips:prop_id. Required."),
+      format: z
+        .enum(FEASIBILITY_EXPORT_FORMATS)
+        .optional()
+        .describe(
+          "Optional artifact format to download after refresh (pdf-feasibility is the only feasibility format).",
+        ),
+      resolution_meters: z
+        .number()
+        .positive()
+        .optional()
+        .describe("Optional DEM resolution in meters forwarded to engine-api."),
+      contour_interval_meters: z
+        .number()
+        .positive()
+        .optional()
+        .describe("Optional contour interval in meters for the appended site-plan sheet."),
+      address: z
+        .string()
+        .optional()
+        .describe(
+          "Optional caller-supplied street address for the cover and summary blocks. Never fabricated by the engine when omitted.",
+        ),
+      county_name: z
+        .string()
+        .optional()
+        .describe(
+          "Optional caller-supplied county name for the cover and summary blocks. Never fabricated by the engine when omitted.",
+        ),
+      flood_study_available: z
+        .boolean()
+        .optional()
+        .describe(
+          "Optional caller-asserted flag: whether a flood study is on file for this parcel. Forwarded verbatim; never inferred by the engine.",
+        ),
+      narrative_override: z
+        .object({
+          text: z.string().max(20000),
+          generated_by: z.string().max(120),
+          generated_at: z.string().max(64),
+        })
+        .optional()
+        .describe(
+          "Optional already-generated narrative (the engine never calls an LLM itself). Absent renders the deterministic skeleton fallback — see narrativeIsDeterministicSkeleton on the response.",
+        ),
+      live_view_url: z
+        .string()
+        .max(500)
+        .optional()
+        .describe(
+          "Optional live Smart Site view URL forwarded verbatim to the engine assembler. Printing onto PDF bytes is engine-owned.",
+        ),
+    },
+    async ({
+      parcel_node_id,
+      format,
+      resolution_meters,
+      contour_interval_meters,
+      address,
+      county_name,
+      flood_study_available,
+      narrative_override,
+      live_view_url,
+    }) => {
+      const tool = "refresh_parcel_feasibility_export";
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      const paidTarget = {
+        accessPolicy: "public-paid" as const,
+        jurisdictionTenant: "property-spine",
+        sharedWithTenants: [] as string[],
+      };
+      if (!canReadAccessTarget(subject, paidTarget)) {
+        logAccessDenied({
+          tool,
+          policy: "public-paid",
+          atomJurisdiction: paidTarget.jurisdictionTenant,
+          subjectTenant: subject.jurisdictionTenant,
+          platformInternal: subject.platformInternal,
+          reason: "feasibility_export_paid_catalog",
+        });
+        return errorContent(
+          `${tool} requires a paid X-Hauska-Key (public-paid). Anonymous and free tiers cannot refresh feasibility exports.`,
+        );
+      }
+
+      const identity = requireIdentifiedCaller(tool);
+      if (!identity.ok) return identity.content;
+
+      const authCtx = getCurrentAuthContext();
+      if (isSdkMeteringEnabled()) {
+        const meter = await authorizePaidCall({
+          keyId: authCtx!.key_id!,
+          keyHash: authCtx?.key_hash,
+          mcpTier: tier,
+          tool,
+          requestId: getCurrentRequestId(),
+          product: getCurrentProduct(),
+        });
+        if (!meter.allowed) {
+          logger.warn("tool_metering_denied", {
+            tool,
+            deny_reason: meter.denyReason ?? null,
+          });
+          return errorContent(
+            meter.denyMessage ??
+              `Metering denied for tool "${tool}". Upgrade or retry after quota resets.`,
+          );
+        }
+      }
+
+      const gateProduct = gateFrontProductFor(getCurrentProduct()) ?? "cortex";
+      const gate = {
+        gateProduct,
+        accessTier: "public-paid" as const,
+        tenantId:
+          resolveGateTenantId(authCtx) ??
+          authCtx?.key_id ??
+          "public-catalog",
+        gateCredentialId: authCtx!.key_id!,
+        requestId: getCurrentRequestId(),
+      };
+
+      try {
+        const refresh = await engineApiClient.refreshParcelFeasibilityExport(
+          parcel_node_id,
+          {
+            resolutionMeters: resolution_meters,
+            contourIntervalMeters: contour_interval_meters,
+            address,
+            countyName: county_name,
+            floodStudyAvailable: flood_study_available,
+            ...(live_view_url ? { liveViewUrl: live_view_url } : {}),
+            ...(narrative_override
+              ? {
+                  narrativeOverride: {
+                    text: narrative_override.text,
+                    generatedBy: narrative_override.generated_by,
+                    generatedAt: narrative_override.generated_at,
+                  },
+                }
+              : {}),
+          },
+          gate,
+        );
+
+        const data: import("./feasibility-export-contract.js").ParcelFeasibilityExportToolData =
+          {
+            parcelNodeId: parcel_node_id,
+            atom: refresh.atom,
+            artifacts: refresh.artifacts,
+            ...(live_view_url ? { liveViewUrl: live_view_url } : {}),
+            pageCount: refresh.pageCount,
+            feasibilityPageCount: refresh.feasibilityPageCount,
+            sitePlanAppended: refresh.sitePlanAppended,
+            sitePlanUnavailableReason: refresh.sitePlanUnavailableReason,
+            sectionCount: refresh.sectionCount,
+            openItemCount: refresh.openItemCount,
+            narrativeIsDeterministicSkeleton: refresh.narrativeIsDeterministicSkeleton,
+          };
+
+        if (format && !isFeasibilityExportArtifactDeferred(refresh.artifacts)) {
+          const artifactEntry = refresh.artifacts["pdf-feasibility"];
+          const { bytes, contentType } =
+            await engineApiClient.downloadParcelFeasibilityExport(
+              parcel_node_id,
+              gate,
+            );
+          const byteCount = bytes.byteLength;
+          const downloadPath = feasibilityExportDownloadPath(parcel_node_id);
+          if (byteCount <= FEASIBILITY_EXPORT_MAX_INLINE_BYTES) {
+            data.download = {
+              format: "pdf-feasibility",
+              contentType: contentType || FEASIBILITY_EXPORT_CONTENT_TYPE,
+              base64: Buffer.from(bytes).toString("base64"),
+              byteCount,
+            };
+          } else {
+            data.download = {
+              format: "pdf-feasibility",
+              contentType: contentType || FEASIBILITY_EXPORT_CONTENT_TYPE,
+              ref: artifactEntry?.ref ?? downloadPath,
+              byteCount,
+              downloadPath,
+            };
+          }
+        } else if (format && isFeasibilityExportArtifactDeferred(refresh.artifacts)) {
+          const deferred = refresh.artifacts["pdf-feasibility"];
+          data.download = undefined;
+          data.artifacts = {
+            ...data.artifacts,
+            "pdf-feasibility": deferred ?? {
+              format: "pdf-feasibility",
+              deferred: true,
+              deferredReason:
+                "pdf-feasibility is deferred or unavailable for this parcel.",
+            },
+          };
+        }
+
+        const __readEnv = finalizeReadEnvelope(
+          tool,
+          parcelFeasibilityExportEnvelope(data, {
+            tier,
+            readKind: "catalog",
+            note:
+              "Site geometry derived from public GIS records; narrative is either engine-generated deterministic skeleton or caller-supplied narrativeOverride, labeled accordingly. Not a boundary survey. Not for legal record. " +
+              "One SDK meter consumed per export request.",
+          }),
+          "public-paid",
+        );
+        logToolRead(
+          {
+            tool,
+            parcel_node_id,
+            tier,
+            format: format ?? null,
+            artifact_count: Object.keys(refresh.artifacts).length,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry the export in a moment.`,
+          );
+        }
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Feasibility export requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          return errorContent(
+            `Engine API rejected feasibility export (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`,
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 2e-3: download_parcel_feasibility_export
+  //
+  // Streams the bytes for the already-refreshed pdf-feasibility artifact
+  // back to the caller as base64. A multi-section feasibility PDF routinely
+  // exceeds the 256 KiB inline cap, so the refresh tool returns a ref and
+  // the BFF fetches the bytes through this gate-signed hop (engine-api
+  // accepts ONLY gate-signed calls — same reason download_parcel_dossier_export
+  // exists). No format param: the engine's feasibility download route
+  // serves the single pdf-feasibility artifact unconditionally.
+  //
+  // SAME public-paid gate as the refresh tool. NOT metered: the SDK meter
+  // is consumed once at refresh time; the download is the cheap second hop
+  // of that same paid request.
+  // -----------------------------------------------------------------
+  server.tool(
+    "download_parcel_feasibility_export",
+    "Download the bytes for the already-refreshed Feasibility Study PDF " +
+      "(pdf-feasibility). Gate-signed proxy to engine-api; returns the file " +
+      "as base64 with its content type. Call refresh_parcel_feasibility_export " +
+      "first to build the artifact. " +
+      "public-paid; one SDK meter is consumed at refresh, not here.",
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          PARCEL_NODE_ID_REGEX,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48029:105129)",
+        )
+        .describe("Permanent parcel node id county_fips:prop_id. Required."),
+    },
+    async ({ parcel_node_id }) => {
+      const tool = "download_parcel_feasibility_export";
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      const paidTarget = {
+        accessPolicy: "public-paid" as const,
+        jurisdictionTenant: "property-spine",
+        sharedWithTenants: [] as string[],
+      };
+      if (!canReadAccessTarget(subject, paidTarget)) {
+        logAccessDenied({
+          tool,
+          policy: "public-paid",
+          atomJurisdiction: paidTarget.jurisdictionTenant,
+          subjectTenant: subject.jurisdictionTenant,
+          platformInternal: subject.platformInternal,
+          reason: "feasibility_export_download_paid_catalog",
+        });
+        return errorContent(
+          `${tool} requires a paid X-Hauska-Key (public-paid). Anonymous and free tiers cannot download feasibility exports.`,
+        );
+      }
+
+      const identity = requireIdentifiedCaller(tool);
+      if (!identity.ok) return identity.content;
+
+      const authCtx = getCurrentAuthContext();
+      const gateProduct = gateFrontProductFor(getCurrentProduct()) ?? "cortex";
+      const gate = {
+        gateProduct,
+        accessTier: "public-paid" as const,
+        tenantId:
+          resolveGateTenantId(authCtx) ??
+          authCtx?.key_id ??
+          "public-catalog",
+        gateCredentialId: authCtx!.key_id!,
+        requestId: getCurrentRequestId(),
+      };
+
+      try {
+        const { bytes, contentType } =
+          await engineApiClient.downloadParcelFeasibilityExport(
+            parcel_node_id,
+            gate,
+          );
+        const byteCount = bytes.byteLength;
+        const data = {
+          parcelNodeId: parcel_node_id,
+          download: {
+            format: "pdf-feasibility" as const,
+            contentType: contentType || FEASIBILITY_EXPORT_CONTENT_TYPE,
+            base64: Buffer.from(bytes).toString("base64"),
+            byteCount,
+          },
+        };
+        const __readEnv = finalizeReadEnvelope(
+          tool,
+          buildEnvelope(
+            data,
+            builtProvenance([
+              completeProvenance({
+                did: `did:hauska:feasibility-export:${parcel_node_id}:pdf-feasibility`,
+                entityType: "parcel-site-plan-export-artifact",
+                entityId: parcel_node_id,
+                jurisdictionTenant: "property-spine",
+                contentHash: null,
+                cidNote:
+                  "Binary artifact returned as base64; site geometry derived from public GIS records, narrative engine-generated or caller-supplied.",
+                source: {
+                  adapter: "engine-api",
+                  url: feasibilityExportDownloadPath(parcel_node_id),
+                  fetchedAt: new Date().toISOString(),
+                },
+              }),
+            ]),
+            { tier, readKind: "catalog" },
+          ),
+          "public-paid",
+        );
+        logToolRead(
+          {
+            tool,
+            parcel_node_id,
+            tier,
+            format: "pdf-feasibility",
+            byte_length: byteCount,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry the download in a moment.`,
+          );
+        }
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Feasibility export download requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          if (err.status === 404) {
+            return errorContent(
+              `Feasibility artifact not found (404) for ${parcel_node_id}. ` +
+                "Call refresh_parcel_feasibility_export first to build it.",
+            );
+          }
+          if (err.status === 410) {
+            return errorContent(
+              `Feasibility artifact bytes evicted (410) for ${parcel_node_id}. ` +
+                "Call refresh_parcel_feasibility_export again to rebuild it.",
+            );
+          }
+          return errorContent(
+            `Engine API rejected feasibility export download (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`,
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 2d-4: refresh_parcel_flood_drainage_export (OPS-16 P-120 item 27).
+  // Sibling of refresh_parcel_dossier_export above: SAME public-paid
+  // accessPolicy gate, SAME one-meter-per-export-request metering
+  // discipline — a distinct engine route (flood-drainage/*), a single
+  // format (pdf-flood-drainage), and a DISTINCT response shape: the engine
+  // wraps the refresh response in `data` and returns a singular `artifact`
+  // plus a `study` GeoJSON payload, not the {atom, artifacts} shape
+  // site-plan/dossier/feasibility share (see
+  // flood-drainage-export-contract.ts for why). The request body is
+  // forwarded to the engine VERBATIM.
+  // -----------------------------------------------------------------
+  server.tool(
+    "refresh_parcel_flood_drainage_export",
+    TOOL_COPY.refresh_parcel_flood_drainage_export,
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          PARCEL_NODE_ID_REGEX,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48029:105129)",
+        )
+        .describe("Permanent parcel node id county_fips:prop_id. Required."),
+      format: z
+        .enum(FLOOD_DRAINAGE_EXPORT_FORMATS)
+        .optional()
+        .describe(
+          "Optional artifact format to download after refresh (pdf-flood-drainage is the only flood-drainage format).",
+        ),
+      address: z
+        .string()
+        .optional()
+        .describe(
+          "Optional caller-supplied street address for the PDF summary block. Never fabricated by the engine when omitted.",
+        ),
+      county_name: z
+        .string()
+        .optional()
+        .describe(
+          "Optional caller-supplied county name for the PDF summary block. Never fabricated by the engine when omitted.",
+        ),
+      rainfall_depth_inches: z
+        .number()
+        .positive()
+        .max(60)
+        .optional()
+        .describe(
+          "Optional design rainfall depth in inches forwarded to engine-api. Defaults to the engine's own source when omitted.",
+        ),
+    },
+    async ({
+      parcel_node_id,
+      format,
+      address,
+      county_name,
+      rainfall_depth_inches,
+    }) => {
+      const tool = "refresh_parcel_flood_drainage_export";
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      const paidTarget = {
+        accessPolicy: "public-paid" as const,
+        jurisdictionTenant: "property-spine",
+        sharedWithTenants: [] as string[],
+      };
+      if (!canReadAccessTarget(subject, paidTarget)) {
+        logAccessDenied({
+          tool,
+          policy: "public-paid",
+          atomJurisdiction: paidTarget.jurisdictionTenant,
+          subjectTenant: subject.jurisdictionTenant,
+          platformInternal: subject.platformInternal,
+          reason: "flood_drainage_export_paid_catalog",
+        });
+        return errorContent(
+          `${tool} requires a paid X-Hauska-Key (public-paid). Anonymous and free tiers cannot refresh flood-drainage exports.`,
+        );
+      }
+
+      const identity = requireIdentifiedCaller(tool);
+      if (!identity.ok) return identity.content;
+
+      const authCtx = getCurrentAuthContext();
+      if (isSdkMeteringEnabled()) {
+        const meter = await authorizePaidCall({
+          keyId: authCtx!.key_id!,
+          keyHash: authCtx?.key_hash,
+          mcpTier: tier,
+          tool,
+          requestId: getCurrentRequestId(),
+          product: getCurrentProduct(),
+        });
+        if (!meter.allowed) {
+          logger.warn("tool_metering_denied", {
+            tool,
+            deny_reason: meter.denyReason ?? null,
+          });
+          return errorContent(
+            meter.denyMessage ??
+              `Metering denied for tool "${tool}". Upgrade or retry after quota resets.`,
+          );
+        }
+      }
+
+      const gateProduct = gateFrontProductFor(getCurrentProduct()) ?? "cortex";
+      const gate = {
+        gateProduct,
+        accessTier: "public-paid" as const,
+        tenantId:
+          resolveGateTenantId(authCtx) ??
+          authCtx?.key_id ??
+          "public-catalog",
+        gateCredentialId: authCtx!.key_id!,
+        requestId: getCurrentRequestId(),
+      };
+
+      try {
+        const refresh = await engineApiClient.refreshParcelFloodDrainageExport(
+          parcel_node_id,
+          {
+            address,
+            countyName: county_name,
+            rainfallDepthInches: rainfall_depth_inches,
+          },
+          gate,
+        );
+
+        const data: import("./flood-drainage-export-contract.js").ParcelFloodDrainageExportToolData =
+          {
+            parcelNodeId: refresh.data.parcelNodeId,
+            study: refresh.data.study,
+            artifact: refresh.data.artifact,
+          };
+
+        if (format && !isFloodDrainageExportArtifactDeferred(refresh.data.artifact)) {
+          const { bytes, contentType } =
+            await engineApiClient.downloadParcelFloodDrainageExport(
+              parcel_node_id,
+              gate,
+            );
+          const byteCount = bytes.byteLength;
+          const downloadPath = floodDrainageExportDownloadPath(parcel_node_id);
+          if (byteCount <= FLOOD_DRAINAGE_EXPORT_MAX_INLINE_BYTES) {
+            data.download = {
+              format: "pdf-flood-drainage",
+              contentType: contentType || FLOOD_DRAINAGE_EXPORT_CONTENT_TYPE,
+              base64: Buffer.from(bytes).toString("base64"),
+              byteCount,
+            };
+          } else {
+            data.download = {
+              format: "pdf-flood-drainage",
+              contentType: contentType || FLOOD_DRAINAGE_EXPORT_CONTENT_TYPE,
+              ref: refresh.data.artifact?.ref ?? downloadPath,
+              byteCount,
+              downloadPath,
+            };
+          }
+        } else if (format && isFloodDrainageExportArtifactDeferred(refresh.data.artifact)) {
+          data.download = undefined;
+          data.artifact = refresh.data.artifact ?? {
+            format: "pdf-flood-drainage",
+            deferred: true,
+            deferredReason:
+              "pdf-flood-drainage is deferred or unavailable for this parcel.",
+          };
+        }
+
+        const __readEnv = finalizeReadEnvelope(
+          tool,
+          parcelFloodDrainageExportEnvelope(data, {
+            tier,
+            readKind: "catalog",
+            note:
+              "Catchment/drainage/rainfall study derived from public DEM and rainfall sources. Not a boundary survey. Not for legal record. " +
+              "One SDK meter consumed per export request.",
+          }),
+          "public-paid",
+        );
+        logToolRead(
+          {
+            tool,
+            parcel_node_id,
+            tier,
+            format: format ?? null,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry the export in a moment.`,
+          );
+        }
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Flood-drainage export requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          return errorContent(
+            `Engine API rejected flood-drainage export (${err.status}): ${err.body.slice(0, 200)}`,
+          );
+        }
+        return errorContent(
+          `Unexpected error invoking ${tool}: ${String(err).slice(0, 200)}`,
+        );
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------
+  // Tool 2e-4: download_parcel_flood_drainage_export
+  //
+  // Streams the bytes for the already-refreshed pdf-flood-drainage artifact
+  // back to the caller as base64. The flood-drainage PDF (with appended
+  // exhibits) routinely exceeds the 256 KiB inline cap, so the refresh tool
+  // returns a ref and the BFF fetches the bytes through this gate-signed hop
+  // (engine-api accepts ONLY gate-signed calls). Unlike dossier/feasibility,
+  // the engine's download route REQUIRES ?format=pdf-flood-drainage — baked
+  // into floodDrainageExportDownloadPath so callers never omit it.
+  //
+  // SAME public-paid gate as the refresh tool. NOT metered: the SDK meter
+  // is consumed once at refresh time; the download is the cheap second hop
+  // of that same paid request.
+  // -----------------------------------------------------------------
+  server.tool(
+    "download_parcel_flood_drainage_export",
+    "Download the bytes for the already-refreshed Flood & Drainage PDF " +
+      "(pdf-flood-drainage). Gate-signed proxy to engine-api; returns the " +
+      "file as base64 with its content type. Call " +
+      "refresh_parcel_flood_drainage_export first to build the artifact. " +
+      "public-paid; one SDK meter is consumed at refresh, not here.",
+    {
+      parcel_node_id: z
+        .string()
+        .regex(
+          PARCEL_NODE_ID_REGEX,
+          "parcel_node_id must be county_fips:prop_id (e.g. 48029:105129)",
+        )
+        .describe("Permanent parcel node id county_fips:prop_id. Required."),
+    },
+    async ({ parcel_node_id }) => {
+      const tool = "download_parcel_flood_drainage_export";
+      const tier = getCurrentTier();
+      const subject = getCurrentAccessSubject();
+      const paidTarget = {
+        accessPolicy: "public-paid" as const,
+        jurisdictionTenant: "property-spine",
+        sharedWithTenants: [] as string[],
+      };
+      if (!canReadAccessTarget(subject, paidTarget)) {
+        logAccessDenied({
+          tool,
+          policy: "public-paid",
+          atomJurisdiction: paidTarget.jurisdictionTenant,
+          subjectTenant: subject.jurisdictionTenant,
+          platformInternal: subject.platformInternal,
+          reason: "flood_drainage_export_download_paid_catalog",
+        });
+        return errorContent(
+          `${tool} requires a paid X-Hauska-Key (public-paid). Anonymous and free tiers cannot download flood-drainage exports.`,
+        );
+      }
+
+      const identity = requireIdentifiedCaller(tool);
+      if (!identity.ok) return identity.content;
+
+      const authCtx = getCurrentAuthContext();
+      const gateProduct = gateFrontProductFor(getCurrentProduct()) ?? "cortex";
+      const gate = {
+        gateProduct,
+        accessTier: "public-paid" as const,
+        tenantId:
+          resolveGateTenantId(authCtx) ??
+          authCtx?.key_id ??
+          "public-catalog",
+        gateCredentialId: authCtx!.key_id!,
+        requestId: getCurrentRequestId(),
+      };
+
+      try {
+        const { bytes, contentType } =
+          await engineApiClient.downloadParcelFloodDrainageExport(
+            parcel_node_id,
+            gate,
+          );
+        const byteCount = bytes.byteLength;
+        const data = {
+          parcelNodeId: parcel_node_id,
+          download: {
+            format: "pdf-flood-drainage" as const,
+            contentType: contentType || FLOOD_DRAINAGE_EXPORT_CONTENT_TYPE,
+            base64: Buffer.from(bytes).toString("base64"),
+            byteCount,
+          },
+        };
+        const __readEnv = finalizeReadEnvelope(
+          tool,
+          buildEnvelope(
+            data,
+            builtProvenance([
+              completeProvenance({
+                did: `did:hauska:flood-drainage-export:${parcel_node_id}:pdf-flood-drainage`,
+                entityType: "parcel-site-plan-export-artifact",
+                entityId: parcel_node_id,
+                jurisdictionTenant: "property-spine",
+                contentHash: null,
+                cidNote:
+                  "Binary artifact returned as base64; catchment/drainage/rainfall study derived from public DEM and rainfall sources.",
+                source: {
+                  adapter: "engine-api",
+                  url: floodDrainageExportDownloadPath(parcel_node_id),
+                  fetchedAt: new Date().toISOString(),
+                },
+              }),
+            ]),
+            { tier, readKind: "catalog" },
+          ),
+          "public-paid",
+        );
+        logToolRead(
+          {
+            tool,
+            parcel_node_id,
+            tier,
+            format: "pdf-flood-drainage",
+            byte_length: byteCount,
+          },
+          __readEnv.atoms,
+        );
+        return envelopeContent(__readEnv);
+      } catch (err) {
+        if (err instanceof EngineApiTimeoutError) {
+          return errorContent(
+            `${err.message}. The engine may be cold-starting; retry the download in a moment.`,
+          );
+        }
+        if (err instanceof EngineApiUnreachableError) {
+          return errorContent(
+            `Engine API unreachable at ${err.url}. Flood-drainage export download requires engine-api.`,
+          );
+        }
+        if (err instanceof EngineApiHttpError) {
+          if (err.status === 404) {
+            return errorContent(
+              `Flood-drainage artifact not found (404) for ${parcel_node_id}. ` +
+                "Call refresh_parcel_flood_drainage_export first to build it.",
+            );
+          }
+          if (err.status === 410) {
+            return errorContent(
+              `Flood-drainage artifact bytes evicted (410) for ${parcel_node_id}. ` +
+                "Call refresh_parcel_flood_drainage_export again to rebuild it.",
+            );
+          }
+          return errorContent(
+            `Engine API rejected flood-drainage export download (${err.status}): ${err.body.slice(0, 200)}`,
           );
         }
         return errorContent(

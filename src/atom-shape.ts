@@ -39,6 +39,8 @@ import type { PropertyAtomChainData } from "./property-atom-chain.js";
 import type { ParcelTerrainExportToolData } from "./terrain-export-contract.js";
 import type { ParcelSitePlanExportToolData } from "./site-plan-export-contract.js";
 import type { ParcelDossierExportToolData } from "./dossier-export-contract.js";
+import type { ParcelFeasibilityExportToolData } from "./feasibility-export-contract.js";
+import type { ParcelFloodDrainageExportToolData } from "./flood-drainage-export-contract.js";
 import { checkIccSearchPathAgreement } from "./icc-content.js";
 import { extractCitedAtomDid } from "./source-obligation-meter.js";
 import type {
@@ -515,6 +517,81 @@ export function parcelDossierExportEnvelope(
         url:
           typeof atom.sourceUrl === "string" ? atom.sourceUrl : null,
         fetchedAt,
+      },
+    },
+  ];
+  return buildEnvelope(data, builtProvenance(atoms), { ...options, readKind: "catalog" });
+}
+
+export function parcelFeasibilityExportEnvelope(
+  data: ParcelFeasibilityExportToolData,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<ParcelFeasibilityExportToolData> {
+  const atom = data.atom;
+  const fetchedAt =
+    typeof atom.fetchedAt === "string"
+      ? atom.fetchedAt
+      : new Date().toISOString();
+  const rawDid =
+    typeof atom.atomDid === "string"
+      ? atom.atomDid
+      : `did:hauska:parcel-terrain-model:${data.parcelNodeId}`;
+  const did = rawDid.startsWith("did:") ? rawDid : `did:hauska:parcel-terrain-model:${rawDid}`;
+  const jurisdictionTenant =
+    typeof atom.jurisdictionTenant === "string"
+      ? atom.jurisdictionTenant
+      : "property-spine";
+  // The feasibility study records its pdf-feasibility artifact on the SAME
+  // parcel-terrain-model atom the site-plan/dossier/terrain exports write —
+  // provenance entry stays on that atom. Engine-composed narrative content
+  // (deterministic skeleton, or caller-supplied narrativeOverride) is
+  // rendered by the engine and never becomes catalog provenance.
+  const atoms: AtomProvenanceEntry[] = [
+    {
+      did,
+      entityType: "parcel-terrain-model",
+      entityId: data.parcelNodeId,
+      jurisdictionTenant,
+      contentHash:
+        typeof atom.contentHash === "string" ? atom.contentHash : null,
+      cidNote: CID_NOTE,
+      source: {
+        adapter:
+          typeof atom.sourceAdapter === "string"
+            ? atom.sourceAdapter
+            : "engine:site-plan-composer",
+        url:
+          typeof atom.sourceUrl === "string" ? atom.sourceUrl : null,
+        fetchedAt,
+      },
+    },
+  ];
+  return buildEnvelope(data, builtProvenance(atoms), { ...options, readKind: "catalog" });
+}
+
+export function parcelFloodDrainageExportEnvelope(
+  data: ParcelFloodDrainageExportToolData,
+  options: BuildEnvelopeOptions,
+): ToolEnvelope<ParcelFloodDrainageExportToolData> {
+  // Unlike dossier/site-plan/feasibility, the engine's flood-drainage
+  // refresh response carries no top-level `atom` object (see
+  // flood-drainage-export-contract.ts) — the artifact lives on the same
+  // parcel-terrain-model atom those routes read, but the refresh response
+  // itself never echoes it back. Fall back to the same synthesized DID
+  // dossier/site-plan/feasibility already use when atom.atomDid is absent,
+  // rather than fabricate fields this response never supplies.
+  const atoms: AtomProvenanceEntry[] = [
+    {
+      did: `did:hauska:parcel-terrain-model:${data.parcelNodeId}`,
+      entityType: "parcel-terrain-model",
+      entityId: data.parcelNodeId,
+      jurisdictionTenant: "property-spine",
+      contentHash: null,
+      cidNote: CID_NOTE,
+      source: {
+        adapter: "engine:flood-drainage",
+        url: null,
+        fetchedAt: new Date().toISOString(),
       },
     },
   ];

@@ -91,9 +91,13 @@ export const PUBLIC_CATALOG_TOOLS = new Set([
   "refresh_parcel_terrain_export",
   "refresh_parcel_site_plan_export",
   "refresh_parcel_dossier_export",
+  "refresh_parcel_feasibility_export",
+  "refresh_parcel_flood_drainage_export",
   "download_parcel_terrain_export",
   "download_parcel_site_plan_export",
   "download_parcel_dossier_export",
+  "download_parcel_feasibility_export",
+  "download_parcel_flood_drainage_export",
   "query_jurisdiction",
   "search_permit_atoms",
   "list_jurisdictions",
@@ -184,6 +188,42 @@ export function toolGateMetadata(name: string): ToolProductGate {
       gate: "access_policy",
       gate_summary:
         "Public catalog paid dossier download (public-paid). Second hop of refresh_parcel_dossier_export; identified caller required; anonymous/free denied. Not separately metered.",
+      anonymous_ok: false,
+    };
+  }
+  if (name === "refresh_parcel_feasibility_export") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Public catalog paid Feasibility Study PDF export (public-paid) — sibling of refresh_parcel_dossier_export, same gate shape. Requires X-Hauska-Key with paid entitlement; anonymous/free denied. One SDK meter per export request via authorizePaidCall.",
+      anonymous_ok: false,
+    };
+  }
+  if (name === "download_parcel_feasibility_export") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Public catalog paid feasibility download (public-paid). Second hop of refresh_parcel_feasibility_export; identified caller required; anonymous/free denied. Not separately metered.",
+      anonymous_ok: false,
+    };
+  }
+  if (name === "refresh_parcel_flood_drainage_export") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Public catalog paid Flood & Drainage PDF export (public-paid) — sibling of refresh_parcel_dossier_export, same gate shape, distinct engine response shape (data-wrapped study + singular artifact). Requires X-Hauska-Key with paid entitlement; anonymous/free denied. One SDK meter per export request via authorizePaidCall.",
+      anonymous_ok: false,
+    };
+  }
+  if (name === "download_parcel_flood_drainage_export") {
+    return {
+      product: "public",
+      gate: "access_policy",
+      gate_summary:
+        "Public catalog paid flood-drainage download (public-paid). Second hop of refresh_parcel_flood_drainage_export; identified caller required; anonymous/free denied. Not separately metered.",
       anonymous_ok: false,
     };
   }
